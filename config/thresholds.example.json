@@ -1,0 +1,24 @@
+{
+  "sampling": {
+    "sample_rate_hz": 1600,
+    "window_samples": 1024,
+    "capture_period_s": 300,
+    "fft_format": "q15"
+  },
+  "features": {
+    "rms_enabled": true,
+    "peak_to_peak_enabled": true,
+    "crest_factor_enabled": true,
+    "band_energy_hz": [50, 400]
+  },
+  "alerts": {
+    "vibration_rms_limit": 0.35,
+    "temperature_c_limit": 65.0,
+    "current_a_limit": 1.2,
+    "consecutive_windows": 3
+  },
+  "power": {
+    "mode_between_captures": "stop",
+    "rtc_wakeup_enabled": true
+  }
+}
