@@ -26,7 +26,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "test_ds18b20.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -97,6 +97,9 @@ int main(void)
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   HAL_UART_Transmit(&huart1, (uint8_t *)start_msg, sizeof(start_msg) - 1U, 100U);
+
+  /* 运行 DS18B20 测试 */
+  Test_DS18B20_Run();
   /* USER CODE END 2 */
 
   /* Infinite loop */
