@@ -27,3 +27,21 @@ CubeMX 自动生成的 HAL、启动文件和中断框架保持可再生成。自
 3. 为每个 DMA/FIFO 缓冲定义所有权、长度、序号和溢出处理。
 4. 启动日志输出固件版本、配置版本、复位原因和硬件基线版本。
 5. 不把 `config/thresholds.example.json` 当作 MCU 运行时文件；固件使用经过检查的版本化配置结构。
+
+## 当前 FreeRTOS 任务接入状态（2026-08-23）
+
+当前 STM32CubeIDE 工程已经接入第一版任务链路：
+
+- `defaultTask`：FreeRTOS 基础 LED 心跳任务；`cycle_task`：等待 RTC Alarm 事件并生成一个 `cycle_id`；
+- `acquisition_task`：从固定采样块池取得块，提交采集结果；当前无真实传感器和 DMA 驱动时，明确标记三路通道无效，不填充伪造数据；
+- `processing_task`：消费采样块，生成带 `valid_mask`、错误位图和处理耗时的周期结果，并归还采样块；
+- `report_task`：通过 USART1 输出结构化周期结果；后续可替换为 UART/无线传输适配；
+- `health_task`：输出任务链路心跳、周期计数、队列深度和丢弃计数。
+
+任务间使用 CMSIS-RTOS V2 消息队列和固定采样块池，当前实现的目标是先证明“RTC Alarm -> 周期协调 -> 采集 -> 处理 -> UART 上报”的所有权和数据流转。真实 SPI 振动采集、温度驱动、ADC DMA、电流标定、CMSIS-DSP 和 Stop 门禁仍需逐项接入，不能把当前无传感器的无效结果写成真实测量能力。
+
+主要应用文件：
+
+- `monitoring_node_f103ze/Core/Inc/monitoring_tasks.h`
+- `monitoring_node_f103ze/Core/Src/monitoring_tasks.c`
+- `monitoring_node_f103ze/Core/Src/freertos.c`

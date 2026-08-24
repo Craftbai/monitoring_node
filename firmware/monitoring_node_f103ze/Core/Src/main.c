@@ -18,15 +18,22 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"
 #include "adc.h"
+#include "dma.h"
 #include "i2c.h"
 #include "rtc.h"
+#include "spi.h"
+#include "tim.h"
 #include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "test_ds18b20.h"
+#include "monitoring_tasks.h"
+#include "ds18b20.h"
+#include <stdio.h>
+#include <stdarg.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -36,6 +43,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define M2_DS18B20_TEST_MODE 0U
+#define UART_LOG_BUFFER_SIZE 256U
 
 /* USER CODE END PD */
 
@@ -47,18 +56,129 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static uint8_t start_msg[] = "monitoring_node: boot\r\n";
+static const uint8_t start_msg[] = "monitoring_node: boot\r\n";
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
-
+void UART_Log(const char *fmt, ...);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/* USART1 阻塞打印。只用于启动日志和低速诊断，不进热路径。 */
+void UART_Log(const char *fmt, ...)
+{
+  char buf[UART_LOG_BUFFER_SIZE];
+  va_list ap;
+  int len;
+
+  va_start(ap, fmt);
+  len = vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+
+  if (len > 0)
+  {
+    if (len > (int)sizeof(buf) - 1)
+    {
+      len = (int)sizeof(buf) - 1;       /* vsnprintf 截断时返回的是期望长度 */
+    }
+    HAL_UART_Transmit(&huart1, (uint8_t *)buf, (uint16_t)len, 100U);
+  }
+}
+
+#if M2_DS18B20_TEST_MODE
+/* M2：DS18B20 最小板级验证。先读 ROM，再读取一次温度。 */
+static const char *DS18B20_StatusText(ds18b20_status_t status)
+{
+  switch (status)
+  {
+    case DS18B20_OK:                 return "OK";
+    case DS18B20_ERROR_NOT_PRESENT:  return "NOT_PRESENT";
+    case DS18B20_ERROR_CRC:          return "CRC";
+    case DS18B20_ERROR_INVALID_DATA: return "INVALID_DATA";
+    case DS18B20_ERROR_TIMEOUT:      return "TIMEOUT";
+    default:                         return "UNKNOWN";
+  }
+}
+
+static void DS18B20_LogTemperature(int16_t raw)
+{
+  int32_t centi_celsius = ((int32_t)raw * 100) / 16;
+  int32_t absolute_centi = (centi_celsius < 0) ? -centi_celsius : centi_celsius;
+
+  UART_Log("[M2] temperature: %s%ld.%02ld C, raw=%d\r\n",
+           (centi_celsius < 0) ? "-" : "",
+           absolute_centi / 100,
+           absolute_centi % 100,
+           raw);
+}
+
+static void DS18B20_TestOnce(void)
+{
+  static uint8_t rom_reported = 0U;
+  ds18b20_status_t status;
+  ds18b20_rom_t rom;
+  int16_t temperature_raw;
+
+  if (rom_reported == 0U)
+  {
+    status = DS18B20_ReadROM(&rom);
+    if (status == DS18B20_OK)
+    {
+      UART_Log("[M2] ROM: %02X-%02X%02X%02X%02X%02X%02X-%02X\r\n",
+               rom.family_code,
+               rom.serial_number[0], rom.serial_number[1],
+               rom.serial_number[2], rom.serial_number[3],
+               rom.serial_number[4], rom.serial_number[5],
+               rom.crc);
+      rom_reported = 1U;
+    }
+    else
+    {
+      UART_Log("[M2] ROM read failed: %s\r\n", DS18B20_StatusText(status));
+      /* ROM 都未读到时，不再把全 0 暂存器误报为 0.00 C。 */
+      return;
+    }
+  }
+
+  status = DS18B20_ReadTemperature(&temperature_raw);
+  if (status == DS18B20_OK)
+  {
+    DS18B20_LogTemperature(temperature_raw);
+  }
+  else
+  {
+    UART_Log("[M2] temperature read failed: %s\r\n", DS18B20_StatusText(status));
+  }
+}
+#endif
+
+/* 设置下一次 RTC 闹钟：当前时间 + interval_sec。
+   用 BIN 格式读时间、BIN 格式设闹钟，规避 BCD 的秒进位问题。 */
+HAL_StatusTypeDef RTC_SetNextAlarm(uint32_t interval_sec)
+{
+  if (interval_sec == 0U)
+  {
+    return HAL_ERROR;
+  }
+  return RTC_SetAlarmCounter(RTC_GetCounter() + interval_sec);
+}
+
+
+/* RTC 闹钟中断回调。中断上下文：只置标志，不做任何阻塞或浮点。 */
+void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
+{
+  (void)hrtc;
+  if (g_monitor_cycle_event != NULL)
+  {
+    (void)osEventFlagsSet(g_monitor_cycle_event, MONITOR_EVENT_RTC_ALARM);
+  }
+}
 
 /* USER CODE END 0 */
 
@@ -91,16 +211,41 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART1_UART_Init();
   MX_RTC_Init();
   MX_ADC1_Init();
+  MX_TIM3_Init();
   MX_I2C1_Init();
+  MX_SPI2_Init();
   /* USER CODE BEGIN 2 */
   HAL_UART_Transmit(&huart1, (uint8_t *)start_msg, sizeof(start_msg) - 1U, 100U);
 
-  /* 运行 DS18B20 测试 */
-  Test_DS18B20_Run();
+#if M2_DS18B20_TEST_MODE
+  UART_Log("[M2] DS18B20 test start, DQ=PG11\r\n");
+  UART_Log("[M2] DQ idle: %s\r\n",
+           HAL_GPIO_ReadPin(DS18B20_DQ_GPIO_Port, DS18B20_DQ_Pin) == GPIO_PIN_SET ? "HIGH" : "LOW");
+  DS18B20_TestOnce();
+#else
+  /* FreeRTOS 周期任务接管 RTC 事件，并在每次上报完成后进入 Stop。 */
+  UART_Log("[BOOT] RTC clk : %s\r\n",
+           (rtc_clk_source == RTC_CLK_LSE) ? "LSE" :
+           (rtc_clk_source == RTC_CLK_LSI) ? "LSI (LSE failed)" : "NONE");
+  UART_Log("[BOOT] boot type: %s\r\n",
+           rtc_cold_boot ? "COLD (time reset)" : "WARM (time kept)");
+  UART_Log("[BOOT] RTC counter: %lu\r\n",
+           (unsigned long)RTC_GetCounter());
+#endif
   /* USER CODE END 2 */
+
+  /* Init scheduler */
+  osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
+  MX_FREERTOS_Init();
+
+  /* Start scheduler */
+  osKernelStart();
+
+  /* We should never get here as control is now taken by the scheduler */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -164,6 +309,28 @@ void SystemClock_Config(void)
 /* USER CODE BEGIN 4 */
 
 /* USER CODE END 4 */
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM4 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM4)
+  {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.
