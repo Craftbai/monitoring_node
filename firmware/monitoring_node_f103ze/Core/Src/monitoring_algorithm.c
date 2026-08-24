@@ -262,6 +262,29 @@ static uint32_t MonitoringAlgorithm_BandEnergy(const q15_t *fft,
   return energy;
 }
 
+/**
+ * @brief  处理单轴振动数据，提取特征值
+ * @param  input: MPU6050 原始值数组（int16_t，±2g 量程，1024 点）
+ * @param  sample_rate_hz: 采样率（Hz，通常为 800Hz）
+ * @param  rms_mg: 输出 RMS 有效值（mg）
+ * @param  peak_to_peak_mg: 输出峰峰值（mg）
+ * @param  crest_milli: 输出峰值因子×1000（无量纲）
+ * @param  band_energy_milli: 输出频带能量×1000（50-400Hz）
+ * @param  saturation_count: 饱和计数器（累加）
+ *
+ * @note   处理步骤：
+ *         1. 预处理（去直流 + 滤波 + 加窗）
+ *            调用 MonitoringAlgorithm_PrepareVibration()
+ *         2. RMS 计算
+ *            使用 CMSIS-DSP arm_rms_q15()，结果从 Q15 转回 mg
+ *         3. 峰峰值计算
+ *            遍历加窗后的信号，找最大值和最小值（转 mg 后计算）
+ *         4. 峰值因子计算
+ *            峰值因子 = 峰值 / RMS，×1000 避免小数
+ *         5. FFT 与频带能量
+ *            使用 CMSIS-DSP arm_rfft_q15()，1024 点实数 FFT
+ *            计算 50-400Hz 频带内所有 bin 的功率和
+ */
 static void MonitoringAlgorithm_ProcessAxis(const int16_t *input,
                                             uint16_t sample_rate_hz,
                                             int32_t *rms_mg,
@@ -304,6 +327,25 @@ static void MonitoringAlgorithm_ProcessAxis(const int16_t *input,
                          : 0U;
 }
 
+/**
+ * @brief  处理电流数据，提取有效值
+ * @param  block: 采样块指针（只读）
+ * @param  result: 周期结果指针（写入电流特征）
+ * @param  saturation_count: 饱和计数器（累加）
+ *
+ * @note   处理步骤：
+ *         1. 去零点偏置
+ *            ACS712 输出 = Vcc/2（零点）+ 灵敏度×电流
+ *            零点标定值：2068 counts（对应 1.65V）
+ *         2. 转 Q15 格式
+ *            Q15 = (centered × 32767) / 2048
+ *            饱和检查：超出 [-32768, 32767] 时计数并钳位
+ *         3. RMS 计算
+ *            使用 CMSIS-DSP arm_rms_q15()
+ *         4. 转回物理单位
+ *            rms_raw = (rms_q15 × 2048) / 32767（ADC counts）
+ *            milliamp = (rms_raw × 1000) / 83（mA）
+ */
 static void MonitoringAlgorithm_ProcessCurrent(const monitor_sample_block_t *block,
                                                monitor_cycle_result_t *result,
                                                uint32_t *saturation_count)
@@ -340,6 +382,24 @@ static void MonitoringAlgorithm_ProcessCurrent(const monitor_sample_block_t *blo
                              (int32_t)MONITOR_CURRENT_COUNTS_PER_AMP;
 }
 
+/**
+ * @brief  处理采样块，提取特征并评估告警
+ * @param  block: 采样块指针（输入，只读）
+ * @param  result: 周期结果指针（输出，写入特征值和告警状态）
+ *
+ * @note   处理流程：
+ *         1. 复制元数据（温度/采样率/样本数）
+ *         2. 温度：范围检查（-55°C ~ 125°C），通过后设置 VALID_TEMPERATURE
+ *         3. 振动：对 X/Y/Z 三轴分别调用 ProcessAxis，设置 VALID_VIBRATION
+ *         4. 电流：调用 ProcessCurrent，设置 VALID_CURRENT
+ *         5. 汇总错误标志（NO_SENSOR/TEMP/VIB/CURRENT/SATURATION/OVERFLOW）
+ *         6. 调用 MonitoringAlerts_Update() 评估告警状态
+ *
+ * @note   有效标志设置条件：
+ *         - 温度：flags 无 TEMP_INVALID 且数值在 [-55°C, 125°C]
+ *         - 振动：flags 无 VIB_INVALID 且 sample_count == 1024
+ *         - 电流：flags 无 CURRENT_INVALID/SATURATION 且 sample_count == 1024
+ */
 void MonitoringAlgorithm_Process(const monitor_sample_block_t *block,
                                  monitor_cycle_result_t *result)
 {
