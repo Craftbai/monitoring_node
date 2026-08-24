@@ -1,29 +1,62 @@
+/* =============================================================================
+ * monitoring_nrf24.c - NRF24L01 无线模块驱动实现
+ *
+ * NRF24L01 工作原理：
+ *   NRF24L01 是 2.4GHz 无线收发芯片，支持 1/2Mbps 速率，内置自动重传、
+ *   CRC、ACK 机制。通过 SPI 配置寄存器和读写载荷。
+ *
+ * 寄存器分类：
+ *   - 配置寄存器：CONFIG/EN_AA/EN_RXADDR/SETUP_AW/SETUP_RETR/RF_CH/RF_SETUP
+ *   - 状态寄存器：STATUS/FIFO_STATUS
+ *   - 地址寄存器：RX_ADDR_P0/TX_ADDR
+ *   - 载荷寄存器：RX_PW_P0（接收载荷宽度）
+ *
+ * 发送流程：
+ *   1. 配置为 TX 模式（CONFIG.PRIM_RX = 0）
+ *   2. 写载荷到 TX FIFO（W_TX_PAYLOAD 命令）
+ *   3. CE 高电平 10us 触发发送
+ *   4. 等待 STATUS.TX_DS（发送成功）或 STATUS.MAX_RT（达到最大重传）
+ *   5. 清除 STATUS 标志位
+ *
+ * 当前配置（monitoring_config.h）：
+ *   - 地址：0x01, 0x02, 0x03, 0x04, 0x05
+ *   - 频道：76（2.476GHz）
+ *   - 载荷：32 字节固定长度
+ *   - 速率：1Mbps
+ *   - 功率：0dBm
+ *   - 重传：15 次，延时 750us
+ * ============================================================================= */
+
 #include "monitoring_nrf24.h"
 #include "monitoring_config.h"
 
-#define NRF24_CMD_R_REGISTER      0x00U
-#define NRF24_CMD_W_REGISTER      0x20U
-#define NRF24_CMD_NOP             0xFFU
-#define NRF24_CMD_R_RX_PAYLOAD    0x61U
-#define NRF24_CMD_W_TX_PAYLOAD    0xA0U
-#define NRF24_CMD_FLUSH_TX        0xE1U
-#define NRF24_CMD_FLUSH_RX        0xE2U
-#define NRF24_REGISTER_MASK       0x1FU
+/* ===== SPI 命令定义 ===== */
+#define NRF24_CMD_R_REGISTER      0x00U   /* 读寄存器（OR 寄存器地址） */
+#define NRF24_CMD_W_REGISTER      0x20U   /* 写寄存器（OR 寄存器地址） */
+#define NRF24_CMD_NOP             0xFFU   /* 空操作（用于读 STATUS） */
+#define NRF24_CMD_R_RX_PAYLOAD    0x61U   /* 读 RX 载荷 */
+#define NRF24_CMD_W_TX_PAYLOAD    0xA0U   /* 写 TX 载荷 */
+#define NRF24_CMD_FLUSH_TX        0xE1U   /* 清空 TX FIFO */
+#define NRF24_CMD_FLUSH_RX        0xE2U   /* 清空 RX FIFO */
+#define NRF24_REGISTER_MASK       0x1FU   /* 寄存器地址掩码（低 5 位） */
 
-#define NRF24_REG_CONFIG          0x00U
-#define NRF24_REG_EN_AA           0x01U
-#define NRF24_REG_EN_RXADDR       0x02U
-#define NRF24_REG_SETUP_AW        0x03U
-#define NRF24_REG_SETUP_RETR      0x04U
-#define NRF24_REG_RF_CH           0x05U
-#define NRF24_REG_RF_SETUP        0x06U
-#define NRF24_REG_STATUS          0x07U
-#define NRF24_REG_RX_ADDR_P0      0x0AU
-#define NRF24_REG_TX_ADDR         0x10U
-#define NRF24_REG_RX_PW_P0        0x11U
-#define NRF24_REG_FIFO_STATUS     0x17U
-#define NRF24_REG_DYNPD           0x1CU
-#define NRF24_REG_FEATURE         0x1DU
+/* ===== 寄存器地址定义 ===== */
+#define NRF24_REG_CONFIG          0x00U   /* 配置寄存器（PRIM_RX/PWR_UP/CRC_EN） */
+#define NRF24_REG_EN_AA           0x01U   /* 自动应答使能 */
+#define NRF24_REG_EN_RXADDR       0x02U   /* 接收地址使能 */
+#define NRF24_REG_SETUP_AW        0x03U   /* 地址宽度（3/4/5 字节） */
+#define NRF24_REG_SETUP_RETR      0x04U   /* 自动重传设置（延时+次数） */
+#define NRF24_REG_RF_CH           0x05U   /* 射频频道（0-125） */
+#define NRF24_REG_RF_SETUP        0x06U   /* 射频设置（速率+功率） */
+#define NRF24_REG_STATUS          0x07U   /* 状态寄存器（TX_DS/RX_DR/MAX_RT） */
+#define NRF24_REG_RX_ADDR_P0      0x0AU   /* 接收地址管道 0 */
+#define NRF24_REG_TX_ADDR         0x10U   /* 发送地址 */
+#define NRF24_REG_RX_PW_P0        0x11U   /* 接收载荷宽度管道 0 */
+#define NRF24_REG_FIFO_STATUS     0x17U   /* FIFO 状态 */
+#define NRF24_REG_DYNPD           0x1CU   /* 动态载荷使能 */
+#define NRF24_REG_FEATURE         0x1DU   /* 特性寄存器 */
+
+/* ===== 寄存器位定义 ===== */
 
 #define NRF24_STATUS_RX_DR        0x40U
 #define NRF24_STATUS_TX_DS        0x20U
