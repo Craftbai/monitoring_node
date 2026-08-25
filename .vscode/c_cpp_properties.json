@@ -9,28 +9,43 @@
       "cppStandard": "c++17",
       "includePath": [
         "${workspaceFolder}/firmware/monitoring_node_f103ze/Core/Inc",
+        "${workspaceFolder}/firmware/monitoring_node_f103ze/Core/Src",
         "${workspaceFolder}/firmware/monitoring_node_f103ze/Drivers/STM32F1xx_HAL_Driver/Inc",
         "${workspaceFolder}/firmware/monitoring_node_f103ze/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy",
         "${workspaceFolder}/firmware/monitoring_node_f103ze/Drivers/CMSIS/Device/ST/STM32F1xx/Include",
-        "${workspaceFolder}/firmware/monitoring_node_f103ze/Drivers/CMSIS/Include"
+        "${workspaceFolder}/firmware/monitoring_node_f103ze/Drivers/CMSIS/Include",
+        "${workspaceFolder}/firmware/monitoring_node_f103ze/Middlewares/Third_Party/CMSIS-DSP/Include",
+        "${workspaceFolder}/firmware/monitoring_node_f103ze/Middlewares/Third_Party/FreeRTOS/Source/include",
+        "${workspaceFolder}/firmware/monitoring_node_f103ze/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2",
+        "${workspaceFolder}/firmware/monitoring_node_f103ze/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM3"
       ],
       "defines": [
         "USE_HAL_DRIVER",
         "STM32F103xE",
+        "ARM_MATH_CM3",
         "DEBUG"
       ],
       "browse": {
         "path": [
           "${workspaceFolder}/firmware/monitoring_node_f103ze/Core/Inc",
+          "${workspaceFolder}/firmware/monitoring_node_f103ze/Core/Src",
+          "${workspaceFolder}/firmware/monitoring_node_f103ze/Drivers/STM32F1xx_HAL_Driver/Src",
           "${workspaceFolder}/firmware/monitoring_node_f103ze/Drivers/STM32F1xx_HAL_Driver/Inc",
           "${workspaceFolder}/firmware/monitoring_node_f103ze/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy",
           "${workspaceFolder}/firmware/monitoring_node_f103ze/Drivers/CMSIS/Device/ST/STM32F1xx/Include",
-          "${workspaceFolder}/firmware/monitoring_node_f103ze/Drivers/CMSIS/Include"
+          "${workspaceFolder}/firmware/monitoring_node_f103ze/Drivers/CMSIS/Include",
+          "${workspaceFolder}/firmware/monitoring_node_f103ze/Middlewares/Third_Party/CMSIS-DSP/Include",
+          "${workspaceFolder}/firmware/monitoring_node_f103ze/Middlewares/Third_Party/FreeRTOS/Source/include",
+          "${workspaceFolder}/firmware/monitoring_node_f103ze/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2",
+          "${workspaceFolder}/firmware/monitoring_node_f103ze/Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM3",
+          "${workspaceFolder}/firmware/monitoring_node_f103ze/Middlewares/Third_Party/FreeRTOS/Source",
+          "${workspaceFolder}/firmware/monitoring_node_f103ze/Middlewares/Third_Party/CMSIS-DSP/Source"
         ],
         "limitSymbolsToIncludedHeaders": true
       },
       "compilerArgs": [
         "-mcpu=cortex-m3",
+        "-mfloat-abi=soft",
         "-mthumb"
       ]
     }

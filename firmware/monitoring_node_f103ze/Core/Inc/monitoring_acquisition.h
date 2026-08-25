@@ -20,13 +20,6 @@
 #include "monitoring_tasks.h"
 
 /**
- * @brief  初始化采集层（ADC 校准、MPU6050 初始化）
- * @note   在 MonitoringTasks_Create() 中调用，调度器启动前完成
- * @note   传感器初始化失败不会阻止任务创建，只影响对应通道有效标志
- */
-void MonitoringAcquisition_Init(void);
-
-/**
  * @brief  执行一次三通道采集（温度/振动/电流）
  * @param  block: 采样块指针（由调用者从块池取得）
  * @return 采样块的 flags 字段（MONITOR_SAMPLE_FLAG_* 位图）

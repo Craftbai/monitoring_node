@@ -40,7 +40,6 @@
 #include "ds18b20.h"
 #include "i2c.h"
 #include "mpu6050.h"
-#include "monitoring_nrf24.h"
 #include "tim.h"
 
 #include <string.h>
@@ -114,15 +113,6 @@ static uint16_t MonitoringAcquisition_Average(const uint16_t *data, uint16_t cou
  * @note   在 MonitoringTasks_Create() 中调用，调度器启动前完成
  * @note   传感器初始化失败不会阻止任务创建，只影响对应通道有效标志
  */
-void MonitoringAcquisition_Init(void)
-{
-#if MONITOR_CURRENT_SENSOR_ENABLED
-  g_adc_calibrated = (HAL_ADCEx_Calibration_Start(&hadc1) == HAL_OK) ? 1U : 0U;
-  g_adc_capture_active = 0U;
-#endif
-  g_mpu_ready = (MPU6050_Init() == MPU6050_OK) ? 1U : 0U;
-}
-
 /**
  * @brief  执行一次三通道采集（温度/振动/电流）
  * @param  block: 采样块指针（由调用者从块池取得）

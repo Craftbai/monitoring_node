@@ -1,4 +1,5 @@
 #include "mpu6050.h"
+#include "monitoring_bus.h"
 #include "i2c.h"
 #include "gpio.h"
 
@@ -49,8 +50,7 @@ static void MPU6050_RecoverBus(void)
 
 static mpu6050_status_t MPU6050_Write(uint8_t reg, uint8_t value)
 {
-  if (HAL_I2C_Mem_Write(&hi2c1, MPU6050_I2C_ADDRESS, reg,
-                        I2C_MEMADD_SIZE_8BIT, &value, 1U, 20U) != HAL_OK)
+  if (MonitoringI2c_MemWrite(MPU6050_I2C_ADDRESS, reg, &value, 1U, 20U) != HAL_OK)
   {
     MPU6050_RecoverBus();
     return MPU6050_ERROR_BUS;
@@ -65,8 +65,7 @@ static mpu6050_status_t MPU6050_Read(uint8_t reg, uint8_t *data, uint16_t length
     return MPU6050_ERROR_ARGUMENT;
   }
 
-  if (HAL_I2C_Mem_Read(&hi2c1, MPU6050_I2C_ADDRESS, reg,
-                       I2C_MEMADD_SIZE_8BIT, data, length, 50U) != HAL_OK)
+  if (MonitoringI2c_MemRead(MPU6050_I2C_ADDRESS, reg, data, length, 50U) != HAL_OK)
   {
     MPU6050_RecoverBus();
     return MPU6050_ERROR_BUS;
