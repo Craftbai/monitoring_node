@@ -5,7 +5,7 @@
  *
  * 分区结构：
  *   1/7: NRF24 上报（载荷编码 + 板级 CS/CE 回调）
- *   2/7: 固定静态资源（块池、队列、事件组、信号量）；任务 CB/栈走堆
+ *   2/7: 采样块池（静态）；任务/队列/事件组/信号量句柄（动态）
  *   3/7: 日志与健康（LogLock 宏、g_health、状态文本）
  *   4/7: 通用创建辅助（CreateQueue / CreateThread）
  *   5/7: Stop 门禁与采样块所有权（RearmRtcAlarm/EnterStop/ReturnSampleBlock）
@@ -117,7 +117,7 @@ static uint8_t MonitoringTasks_BuildNrf24Payload(
 #endif
 
 /* =============================================================================
- * 分区 2/7: 固定静态资源（块池、队列、事件组、信号量）；任务 CB/栈走堆
+ * 分区 2/7: 采样块池（静态）；任务/队列/事件组/信号量句柄（动态）
  *
  * 数据流水线（单周期完整路径）：
  *   [RTC 闹钟中断]
@@ -204,24 +204,7 @@ static osMessageQueueId_t g_result_queue;
 osEventFlagsId_t g_monitor_cycle_event;
 osEventFlagsId_t g_monitor_control_event;
 
-/* 队列和事件组的静态控制块 */
-static StaticQueue_t g_cycle_request_queue_cb;
-static StaticQueue_t g_sample_free_queue_cb;
-static StaticQueue_t g_sample_ready_queue_cb;
-static StaticQueue_t g_result_queue_cb;
-static StaticEventGroup_t g_cycle_event_cb;
-static StaticEventGroup_t g_control_event_cb;
-static StaticSemaphore_t g_report_done_sem_cb;
-
-/* 队列存储区 */
-static uint8_t g_cycle_request_queue_mem[sizeof(monitor_cycle_request_t) * MONITOR_QUEUE_DEPTH]
-  __attribute__((aligned(4)));
-static uint8_t g_sample_free_queue_mem[sizeof(monitor_sample_block_t *) * MONITOR_QUEUE_DEPTH]
-  __attribute__((aligned(4)));
-static uint8_t g_sample_ready_queue_mem[sizeof(monitor_sample_block_t *) * MONITOR_QUEUE_DEPTH]
-  __attribute__((aligned(4)));
-static uint8_t g_result_queue_mem[sizeof(monitor_cycle_result_t) * MONITOR_QUEUE_DEPTH]
-  __attribute__((aligned(4)));
+/* 队列/事件组/信号量/互斥量均动态分配：控制块与存储区由 osXXXNew 从 FreeRTOS 堆申请 */
 
 /* 任务句柄（动态分配：TCB 与栈由 osThreadNew 从 FreeRTOS 堆申请） */
 static osThreadId_t g_acquisition_task;
@@ -234,7 +217,6 @@ static osThreadId_t g_watchdog_task;
 /* 日志互斥量和上报完成信号量 */
 static osMutexId_t g_log_mutex;
 static osSemaphoreId_t g_report_done_sem;
-static StaticSemaphore_t g_log_mutex_cb;
 
 /* 看门狗许可与心跳 */
 static volatile uint8_t g_watchdog_permit;
@@ -324,28 +306,19 @@ static const char *MonitoringTasks_StateText(monitor_state_t state)
  * ============================================================================= */
 
 /**
- * @brief  创建静态消息队列
+ * @brief  创建动态消息队列
  * @param  count: 队列深度
  * @param  item_size: 单个元素字节数
- * @param  control_block: 静态控制块指针
- * @param  storage: 队列存储区指针
- * @param  storage_size: 存储区字节数
  * @param  name: 队列名称（用于调试）
  * @return 队列句柄，失败返回 NULL
+ * @note   不传 cb_mem/mq_mem，控制块与存储区由 osMessageQueueNew 从堆分配。
  */
 static osMessageQueueId_t MonitoringTasks_CreateQueue(uint32_t count,
                                                        uint32_t item_size,
-                                                       StaticQueue_t *control_block,
-                                                       void *storage,
-                                                       uint32_t storage_size,
                                                        const char *name)
 {
   const osMessageQueueAttr_t attributes = {
-    .name = name,
-    .cb_mem = control_block,
-    .cb_size = sizeof(*control_block),
-    .mq_mem = storage,
-    .mq_size = storage_size
+    .name = name
   };
 
   return osMessageQueueNew(count, item_size, &attributes);
@@ -1073,9 +1046,7 @@ void MonitoringTasks_Create(void)
 {
   monitor_sample_block_t *block;
   const osMutexAttr_t log_mutex_attributes = {
-    .name = "logMutex",
-    .cb_mem = &g_log_mutex_cb,
-    .cb_size = sizeof(g_log_mutex_cb)
+    .name = "logMutex"
   };
 
   /* ═══════════════════════════════════════════════════════════════════
@@ -1129,9 +1100,7 @@ void MonitoringTasks_Create(void)
    * └─────────────────────────────────────────────────────────────┘
    */
   const osEventFlagsAttr_t cycle_event_attributes = {
-    .name = "cycleEvent",
-    .cb_mem = &g_cycle_event_cb,
-    .cb_size = sizeof(g_cycle_event_cb)
+    .name = "cycleEvent"
   };
   g_monitor_cycle_event = osEventFlagsNew(&cycle_event_attributes);
 
@@ -1149,9 +1118,7 @@ void MonitoringTasks_Create(void)
    * └─────────────────────────────────────────────────────────────┘
    */
   const osEventFlagsAttr_t control_event_attributes = {
-    .name = "controlEvent",
-    .cb_mem = &g_control_event_cb,
-    .cb_size = sizeof(g_control_event_cb)
+    .name = "controlEvent"
   };
   g_monitor_control_event = osEventFlagsNew(&control_event_attributes);
 
@@ -1170,9 +1137,7 @@ void MonitoringTasks_Create(void)
    * └─────────────────────────────────────────────────────────────┘
    */
   const osSemaphoreAttr_t report_done_sem_attributes = {
-    .name = "reportDoneSem",
-    .cb_mem = &g_report_done_sem_cb,
-    .cb_size = sizeof(g_report_done_sem_cb)
+    .name = "reportDoneSem"
   };
   g_report_done_sem = osSemaphoreNew(1U, 0U, &report_done_sem_attributes);
 
@@ -1180,7 +1145,7 @@ void MonitoringTasks_Create(void)
    * 第 4 步：创建消息队列（4 个队列，构成数据流水线）
    * ═══════════════════════════════════════════════════════════════════
    * 队列必须在任务创建前就绪，任务启动后会立即调用 osMessageQueueGet。
-   * 所有队列使用静态分配（预分配控制块和存储区），避免运行期依赖堆。
+   * 所有队列使用动态分配（控制块与存储区由 osMessageQueueNew 从堆申请）。
    * 队列深度统一为 2：支持双缓冲流水线（一个在处理，一个在采集）
    */
 
@@ -1201,9 +1166,6 @@ void MonitoringTasks_Create(void)
   g_cycle_request_queue = MonitoringTasks_CreateQueue(
     MONITOR_QUEUE_DEPTH,
     sizeof(monitor_cycle_request_t),
-    &g_cycle_request_queue_cb,
-    g_cycle_request_queue_mem,
-    sizeof(g_cycle_request_queue_mem),
     "cycleRequestQ");
 
   /*
@@ -1224,9 +1186,6 @@ void MonitoringTasks_Create(void)
   g_sample_free_queue = MonitoringTasks_CreateQueue(
     MONITOR_QUEUE_DEPTH,
     sizeof(monitor_sample_block_t *),
-    &g_sample_free_queue_cb,
-    g_sample_free_queue_mem,
-    sizeof(g_sample_free_queue_mem),
     "sampleFreeQ");
 
   /*
@@ -1247,9 +1206,6 @@ void MonitoringTasks_Create(void)
   g_sample_ready_queue = MonitoringTasks_CreateQueue(
     MONITOR_QUEUE_DEPTH,
     sizeof(monitor_sample_block_t *),
-    &g_sample_ready_queue_cb,
-    g_sample_ready_queue_mem,
-    sizeof(g_sample_ready_queue_mem),
     "sampleReadyQ");
 
   /*
@@ -1270,9 +1226,6 @@ void MonitoringTasks_Create(void)
   g_result_queue = MonitoringTasks_CreateQueue(
     MONITOR_QUEUE_DEPTH,
     sizeof(monitor_cycle_result_t),
-    &g_result_queue_cb,
-    g_result_queue_mem,
-    sizeof(g_result_queue_mem),
     "resultQ");
 
   /* 失败检查：任何一个同步资源或队列创建失败都进入 FAULT 状态 */
@@ -1311,7 +1264,7 @@ void MonitoringTasks_Create(void)
    * ═══════════════════════════════════════════════════════════════════
    * 任务优先级决定抢占关系：高(48) > 中高(40) > 中(24) > 中低(16) > 低(8)
    * 任务 TCB 与栈由 osThreadNew 从 FreeRTOS 堆动态分配，创建一次后常驻；
-   * 队列/块池/信号量/事件组仍为静态分配（固定 SRAM 预算，避免热路径 malloc）。
+   * 仅采样块池保持静态分配（固定 SRAM 预算，避免热路径 malloc）。
    */
 
   /*
