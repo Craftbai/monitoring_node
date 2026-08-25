@@ -34,8 +34,8 @@ void MonitoringDrivers_Init(void) {
   /* ===== 无线模块初始化 ===== */
   monitoring_nrf24_bus_t nrf24_bus = {
     .transfer = MonitoringSpi_Transfer,
-    .chip_select = MonitoringTasks_NrfChipSelect,
-    .chip_enable = MonitoringTasks_NrfChipEnable,
+    .chip_select = MonitoringTasks_Nrf24ChipSelect,
+    .chip_enable = MonitoringTasks_Nrf24ChipEnable,
     .ready = 1U
   };
 
