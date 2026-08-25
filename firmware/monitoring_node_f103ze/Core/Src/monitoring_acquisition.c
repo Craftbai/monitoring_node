@@ -143,7 +143,7 @@ uint32_t MonitoringAcquisition_Capture(monitor_sample_block_t *block)
   uint32_t start_tick;
   uint16_t fifo_count;
   mpu6050_sample_t sample;
-  ds18b20_status_t temperature_status;
+  monitoring_status_t temperature_status;
   int16_t temperature_raw;
   uint8_t temperature_conversion_started = 0U;
   uint8_t mpu_capture_started = 0U;
@@ -519,7 +519,7 @@ uint8_t MonitoringAcquisition_Stop(void)
 uint8_t MonitoringAcquisition_Resume(void)
 {
   HAL_StatusTypeDef adc_calibration_status;
-  mpu6050_status_t mpu_status;
+  monitoring_status_t mpu_status;
 
   /* Stop 后先释放旧的外设状态，再重新套用 CubeMX 生成的参数。
    * 顺序：DeInit → Init，确保寄存器从已知状态开始配置。 */
