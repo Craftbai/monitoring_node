@@ -214,10 +214,10 @@ static uint8_t DS18B20_ReadByte(void)
 
 /**
  * @brief  初始化 DS18B20（复位并检测存在脉冲）
- * @retval DS18B20_OK: 器件存在
- *         DS18B20_ERROR_NOT_PRESENT: 器件不存在
+ * @retval MONITORING_OK: 器件存在
+ *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
  */
-ds18b20_status_t DS18B20_Init(void)
+monitoring_status_t DS18B20_Init(void)
 {
     uint8_t presence;
 
@@ -242,27 +242,27 @@ ds18b20_status_t DS18B20_Init(void)
     DS18B20_SetPinHigh();
 
     /* 存在脉冲应为低电平（presence = 0） */
-    return (presence == 0) ? DS18B20_OK : DS18B20_ERROR_NOT_PRESENT;
+    return (presence == 0) ? MONITORING_OK : MONITORING_ERROR_NOT_PRESENT;
 }
 
 /**
  * @brief  读取 ROM 码（64 位唯一 ID）
  * @param  rom: 指向 ROM 结构体的指针
- * @retval DS18B20_OK: 读取成功
- *         DS18B20_ERROR_NOT_PRESENT: 器件不存在
+ * @retval MONITORING_OK: 读取成功
+ *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
  */
-ds18b20_status_t DS18B20_ReadROM(ds18b20_rom_t *rom)
+monitoring_status_t DS18B20_ReadROM(ds18b20_rom_t *rom)
 {
     uint8_t rom_data[8];
 
     if (rom == NULL)
     {
-        return DS18B20_ERROR_INVALID_DATA;
+        return MONITORING_ERROR;
     }
 
     /* 初始化器件 */
-    if (DS18B20_Init() != DS18B20_OK) {
-        return DS18B20_ERROR_NOT_PRESENT;
+    if (DS18B20_Init() != MONITORING_OK) {
+        return MONITORING_ERROR_NOT_PRESENT;
     }
 
     /* 发送 READ ROM 命令 */
@@ -283,23 +283,23 @@ ds18b20_status_t DS18B20_ReadROM(ds18b20_rom_t *rom)
     /* 验证 CRC */
     uint8_t crc_calc = DS18B20_CRC8(rom_data, 7);
     if (crc_calc != rom->crc) {
-        return DS18B20_ERROR_CRC;
+        return MONITORING_ERROR_CRC;
     }
 
-    return DS18B20_OK;
+    return MONITORING_OK;
 }
 
 /**
  * @brief  读取温度（原始 16 位值）
  * @param  temp_raw: 指向温度原始值的指针（LSB = 0.0625°C）
- * @retval DS18B20_OK: 读取成功
- *         DS18B20_ERROR_NOT_PRESENT: 器件不存在
- *         DS18B20_ERROR_CRC: CRC 校验失败
+ * @retval MONITORING_OK: 读取成功
+ *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
+ *         MONITORING_ERROR_CRC: CRC 校验失败
  */
-ds18b20_status_t DS18B20_ReadTemperature(int16_t *temp_raw)
+monitoring_status_t DS18B20_ReadTemperature(int16_t *temp_raw)
 {
-    ds18b20_status_t status = DS18B20_StartTemperatureConversion();
-    if (status != DS18B20_OK)
+    monitoring_status_t status = DS18B20_StartTemperatureConversion();
+    if (status != MONITORING_OK)
     {
         return status;
     }
@@ -307,15 +307,15 @@ ds18b20_status_t DS18B20_ReadTemperature(int16_t *temp_raw)
     return DS18B20_ReadTemperatureRaw(temp_raw);
 }
 
-ds18b20_status_t DS18B20_StartTemperatureConversion(void)
+monitoring_status_t DS18B20_StartTemperatureConversion(void)
 {
-    if (DS18B20_Init() != DS18B20_OK)
+    if (DS18B20_Init() != MONITORING_OK)
     {
-        return DS18B20_ERROR_NOT_PRESENT;
+        return MONITORING_ERROR_NOT_PRESENT;
     }
     DS18B20_WriteByte(DS18B20_CMD_SKIP_ROM);
     DS18B20_WriteByte(DS18B20_CMD_CONVERT_T);
-    return DS18B20_OK;
+    return MONITORING_OK;
 }
 
 uint8_t DS18B20_ConversionReady(void)
@@ -325,17 +325,17 @@ uint8_t DS18B20_ConversionReady(void)
     return DS18B20_ReadBit();
 }
 
-ds18b20_status_t DS18B20_ReadTemperatureRaw(int16_t *temp_raw)
+monitoring_status_t DS18B20_ReadTemperatureRaw(int16_t *temp_raw)
 {
     uint8_t scratchpad[9];
 
     if (temp_raw == NULL)
     {
-        return DS18B20_ERROR_INVALID_DATA;
+        return MONITORING_ERROR;
     }
-    if (DS18B20_Init() != DS18B20_OK)
+    if (DS18B20_Init() != MONITORING_OK)
     {
-        return DS18B20_ERROR_NOT_PRESENT;
+        return MONITORING_ERROR_NOT_PRESENT;
     }
     DS18B20_WriteByte(DS18B20_CMD_SKIP_ROM);
     DS18B20_WriteByte(DS18B20_CMD_READ_SCRATCH);
@@ -345,57 +345,57 @@ ds18b20_status_t DS18B20_ReadTemperatureRaw(int16_t *temp_raw)
     }
     if (DS18B20_CRC8(scratchpad, 8U) != scratchpad[8])
     {
-        return DS18B20_ERROR_CRC;
+        return MONITORING_ERROR_CRC;
     }
     *temp_raw = (int16_t)(((uint16_t)scratchpad[1] << 8) | scratchpad[0]);
-    return DS18B20_OK;
+    return MONITORING_OK;
 }
 
 /**
  * @brief  读取温度（浮点值，单位：°C）
  * @param  temp_celsius: 指向温度值的指针（°C）
- * @retval DS18B20_OK: 读取成功
+ * @retval MONITORING_OK: 读取成功
  *         其他错误码同上
  */
-ds18b20_status_t DS18B20_ReadTemperatureFloat(float *temp_celsius)
+monitoring_status_t DS18B20_ReadTemperatureFloat(float *temp_celsius)
 {
     int16_t temp_raw;
-    ds18b20_status_t status;
+    monitoring_status_t status;
 
     if (temp_celsius == NULL)
     {
-        return DS18B20_ERROR_INVALID_DATA;
+        return MONITORING_ERROR;
     }
 
     status = DS18B20_ReadTemperature(&temp_raw);
-    if (status != DS18B20_OK) {
+    if (status != MONITORING_OK) {
         return status;
     }
 
     *temp_celsius = DS18B20_ConvertToFloat(temp_raw);
 
-    return DS18B20_OK;
+    return MONITORING_OK;
 }
 
 /**
  * @brief  配置温度分辨率
  * @param  resolution: 分辨率配置（9/10/11/12 位）
- * @retval DS18B20_OK: 配置成功
- *         DS18B20_ERROR_NOT_PRESENT: 器件不存在
+ * @retval MONITORING_OK: 配置成功
+ *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
  */
-ds18b20_status_t DS18B20_SetResolution(ds18b20_resolution_t resolution)
+monitoring_status_t DS18B20_SetResolution(ds18b20_resolution_t resolution)
 {
     if (resolution != DS18B20_RESOLUTION_9BIT &&
         resolution != DS18B20_RESOLUTION_10BIT &&
         resolution != DS18B20_RESOLUTION_11BIT &&
         resolution != DS18B20_RESOLUTION_12BIT)
     {
-        return DS18B20_ERROR_INVALID_DATA;
+        return MONITORING_ERROR;
     }
 
     /* 初始化器件 */
-    if (DS18B20_Init() != DS18B20_OK) {
-        return DS18B20_ERROR_NOT_PRESENT;
+    if (DS18B20_Init() != MONITORING_OK) {
+        return MONITORING_ERROR_NOT_PRESENT;
     }
 
     /* 写入配置寄存器 */
@@ -406,34 +406,34 @@ ds18b20_status_t DS18B20_SetResolution(ds18b20_resolution_t resolution)
     DS18B20_WriteByte(resolution);  /* Config 寄存器 */
 
     /* 保存到 EEPROM */
-    if (DS18B20_Init() != DS18B20_OK) {
-        return DS18B20_ERROR_NOT_PRESENT;
+    if (DS18B20_Init() != MONITORING_OK) {
+        return MONITORING_ERROR_NOT_PRESENT;
     }
     DS18B20_WriteByte(DS18B20_CMD_SKIP_ROM);
     DS18B20_WriteByte(DS18B20_CMD_COPY_SCRATCH);
     HAL_Delay(10);  /* 等待写入完成 */
 
-    return DS18B20_OK;
+    return MONITORING_OK;
 }
 
 /**
  * @brief  获取当前分辨率配置
  * @param  resolution: 指向分辨率配置的指针
- * @retval DS18B20_OK: 读取成功
- *         DS18B20_ERROR_NOT_PRESENT: 器件不存在
+ * @retval MONITORING_OK: 读取成功
+ *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
  */
-ds18b20_status_t DS18B20_GetResolution(ds18b20_resolution_t *resolution)
+monitoring_status_t DS18B20_GetResolution(ds18b20_resolution_t *resolution)
 {
     uint8_t scratchpad[9];
 
     if (resolution == NULL)
     {
-        return DS18B20_ERROR_INVALID_DATA;
+        return MONITORING_ERROR;
     }
 
     /* 初始化器件 */
-    if (DS18B20_Init() != DS18B20_OK) {
-        return DS18B20_ERROR_NOT_PRESENT;
+    if (DS18B20_Init() != MONITORING_OK) {
+        return MONITORING_ERROR_NOT_PRESENT;
     }
 
     /* 读取暂存器 */
@@ -446,7 +446,7 @@ ds18b20_status_t DS18B20_GetResolution(ds18b20_resolution_t *resolution)
 
     if (DS18B20_CRC8(scratchpad, 8U) != scratchpad[8])
     {
-        return DS18B20_ERROR_CRC;
+        return MONITORING_ERROR_CRC;
     }
 
     /* Config 寄存器在字节 4 */
@@ -457,18 +457,18 @@ ds18b20_status_t DS18B20_GetResolution(ds18b20_resolution_t *resolution)
         *resolution != DS18B20_RESOLUTION_11BIT &&
         *resolution != DS18B20_RESOLUTION_12BIT)
     {
-        return DS18B20_ERROR_INVALID_DATA;
+        return MONITORING_ERROR;
     }
 
-    return DS18B20_OK;
+    return MONITORING_OK;
 }
 
 /**
  * @brief  复位 DS18B20（重新初始化）
- * @retval DS18B20_OK: 复位成功
- *         DS18B20_ERROR_NOT_PRESENT: 器件不存在
+ * @retval MONITORING_OK: 复位成功
+ *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
  */
-ds18b20_status_t DS18B20_Reset(void)
+monitoring_status_t DS18B20_Reset(void)
 {
     return DS18B20_Init();
 }

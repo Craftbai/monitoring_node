@@ -28,6 +28,7 @@ extern "C" {
 #endif
 
 #include "main.h"
+#include "monitoring_status.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -53,15 +54,6 @@ typedef enum {
     DS18B20_RESOLUTION_12BIT = 0x7F   /* 12 位，750 ms，0.0625°C */
 } ds18b20_resolution_t;
 
-/* DS18B20 状态码 */
-typedef enum {
-    DS18B20_OK = 0,                   /* 操作成功 */
-    DS18B20_ERROR_NOT_PRESENT,        /* 器件不存在（无存在脉冲） */
-    DS18B20_ERROR_CRC,                /* CRC 校验失败 */
-    DS18B20_ERROR_INVALID_DATA,       /* 无效数据 */
-    DS18B20_ERROR_TIMEOUT             /* 转换超时 */
-} ds18b20_status_t;
-
 /* DS18B20 ROM 结构（64 位唯一 ID） */
 typedef struct {
     uint8_t family_code;              /* 家族代码（DS18B20 = 0x28） */
@@ -73,62 +65,62 @@ typedef struct {
 
 /**
  * @brief  初始化 DS18B20（复位并检测存在脉冲）
- * @retval DS18B20_OK: 器件存在
- *         DS18B20_ERROR_NOT_PRESENT: 器件不存在
+ * @retval MONITORING_OK: 器件存在
+ *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
  */
-ds18b20_status_t DS18B20_Init(void);
+monitoring_status_t DS18B20_Init(void);
 
 /**
  * @brief  读取 ROM 码（64 位唯一 ID）
  * @param  rom: 指向 ROM 结构体的指针
- * @retval DS18B20_OK: 读取成功
- *         DS18B20_ERROR_NOT_PRESENT: 器件不存在
+ * @retval MONITORING_OK: 读取成功
+ *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
  */
-ds18b20_status_t DS18B20_ReadROM(ds18b20_rom_t *rom);
+monitoring_status_t DS18B20_ReadROM(ds18b20_rom_t *rom);
 
 /**
  * @brief  读取温度（原始 16 位值）
  * @param  temp_raw: 指向温度原始值的指针（LSB = 0.0625°C）
- * @retval DS18B20_OK: 读取成功
- *         DS18B20_ERROR_NOT_PRESENT: 器件不存在
- *         DS18B20_ERROR_CRC: CRC 校验失败
+ * @retval MONITORING_OK: 读取成功
+ *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
+ *         MONITORING_ERROR_CRC: CRC 校验失败
  */
-ds18b20_status_t DS18B20_ReadTemperature(int16_t *temp_raw);
-ds18b20_status_t DS18B20_StartTemperatureConversion(void);
+monitoring_status_t DS18B20_ReadTemperature(int16_t *temp_raw);
+monitoring_status_t DS18B20_StartTemperatureConversion(void);
 /* 读取转换状态位；返回 1 表示转换完成，0 表示仍在转换。 */
 uint8_t DS18B20_ConversionReady(void);
-ds18b20_status_t DS18B20_ReadTemperatureRaw(int16_t *temp_raw);
+monitoring_status_t DS18B20_ReadTemperatureRaw(int16_t *temp_raw);
 
 /**
  * @brief  读取温度（浮点值，单位：°C）
  * @param  temp_celsius: 指向温度值的指针（°C）
- * @retval DS18B20_OK: 读取成功
+ * @retval MONITORING_OK: 读取成功
  *         其他错误码同上
  */
-ds18b20_status_t DS18B20_ReadTemperatureFloat(float *temp_celsius);
+monitoring_status_t DS18B20_ReadTemperatureFloat(float *temp_celsius);
 
 /**
  * @brief  配置温度分辨率
  * @param  resolution: 分辨率配置（9/10/11/12 位）
- * @retval DS18B20_OK: 配置成功
- *         DS18B20_ERROR_NOT_PRESENT: 器件不存在
+ * @retval MONITORING_OK: 配置成功
+ *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
  */
-ds18b20_status_t DS18B20_SetResolution(ds18b20_resolution_t resolution);
+monitoring_status_t DS18B20_SetResolution(ds18b20_resolution_t resolution);
 
 /**
  * @brief  获取当前分辨率配置
  * @param  resolution: 指向分辨率配置的指针
- * @retval DS18B20_OK: 读取成功
- *         DS18B20_ERROR_NOT_PRESENT: 器件不存在
+ * @retval MONITORING_OK: 读取成功
+ *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
  */
-ds18b20_status_t DS18B20_GetResolution(ds18b20_resolution_t *resolution);
+monitoring_status_t DS18B20_GetResolution(ds18b20_resolution_t *resolution);
 
 /**
  * @brief  复位 DS18B20（重新初始化）
- * @retval DS18B20_OK: 复位成功
- *         DS18B20_ERROR_NOT_PRESENT: 器件不存在
+ * @retval MONITORING_OK: 复位成功
+ *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
  */
-ds18b20_status_t DS18B20_Reset(void);
+monitoring_status_t DS18B20_Reset(void);
 
 /**
  * @brief  将原始温度值转换为摄氏度

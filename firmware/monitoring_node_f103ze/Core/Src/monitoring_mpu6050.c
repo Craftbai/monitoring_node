@@ -48,131 +48,131 @@ static void MPU6050_RecoverBus(void)
   MX_I2C1_Init();
 }
 
-static mpu6050_status_t MPU6050_Write(uint8_t reg, uint8_t value)
+static monitoring_status_t MPU6050_Write(uint8_t reg, uint8_t value)
 {
   if (MonitoringI2c_MemWrite(MPU6050_I2C_ADDRESS, reg, &value, 1U, 20U) != HAL_OK)
   {
     MPU6050_RecoverBus();
-    return MPU6050_ERROR_BUS;
+    return MONITORING_ERROR_BUS;
   }
-  return MPU6050_OK;
+  return MONITORING_OK;
 }
 
-static mpu6050_status_t MPU6050_Read(uint8_t reg, uint8_t *data, uint16_t length)
+static monitoring_status_t MPU6050_Read(uint8_t reg, uint8_t *data, uint16_t length)
 {
   if (data == NULL || length == 0U)
   {
-    return MPU6050_ERROR_ARGUMENT;
+    return MONITORING_ERROR_ARGUMENT;
   }
 
   if (MonitoringI2c_MemRead(MPU6050_I2C_ADDRESS, reg, data, length, 50U) != HAL_OK)
   {
     MPU6050_RecoverBus();
-    return MPU6050_ERROR_BUS;
+    return MONITORING_ERROR_BUS;
   }
-  return MPU6050_OK;
+  return MONITORING_OK;
 }
 
-mpu6050_status_t MPU6050_Init(void)
+monitoring_status_t MPU6050_Init(void)
 {
   uint8_t who_am_i = 0U;
 
-  if (MPU6050_Read(MPU6050_REG_WHO_AM_I, &who_am_i, 1U) != MPU6050_OK)
+  if (MPU6050_Read(MPU6050_REG_WHO_AM_I, &who_am_i, 1U) != MONITORING_OK)
   {
-    return MPU6050_ERROR_BUS;
+    return MONITORING_ERROR_BUS;
   }
   if (who_am_i != MPU6050_WHO_AM_I_VALUE)
   {
-    return MPU6050_ERROR_ID;
+    return MONITORING_ERROR_NOT_PRESENT;
   }
 
-  if (MPU6050_Write(MPU6050_REG_PWR_MGMT_1, 0x01U) != MPU6050_OK ||
-      MPU6050_Write(MPU6050_REG_CONFIG, 0x00U) != MPU6050_OK ||
+  if (MPU6050_Write(MPU6050_REG_PWR_MGMT_1, 0x01U) != MONITORING_OK ||
+      MPU6050_Write(MPU6050_REG_CONFIG, 0x00U) != MONITORING_OK ||
       /* CONFIG=0 打开数字低通后，内部采样基准为 1 kHz；分频值 0
        * 才能保持 1 kHz 原始输出，采集层再按 4/5 形成有效 800 Hz。
        * 旧值 9 会把实际输出降为 100 Hz。 */
-      MPU6050_Write(MPU6050_REG_SMPLRT_DIV, 0U) != MPU6050_OK ||
-      MPU6050_Write(MPU6050_REG_ACCEL_CONFIG, 0x00U) != MPU6050_OK ||
-      MPU6050_Write(MPU6050_REG_INT_ENABLE, 0x11U) != MPU6050_OK)
+      MPU6050_Write(MPU6050_REG_SMPLRT_DIV, 0U) != MONITORING_OK ||
+      MPU6050_Write(MPU6050_REG_ACCEL_CONFIG, 0x00U) != MONITORING_OK ||
+      MPU6050_Write(MPU6050_REG_INT_ENABLE, 0x11U) != MONITORING_OK)
   {
-    return MPU6050_ERROR_BUS;
+    return MONITORING_ERROR_BUS;
   }
 
   /* 初始化只配置器件，FIFO 在每个采集周期开始时单独启动。 */
-  return MPU6050_OK;
+  return MONITORING_OK;
 }
 
-mpu6050_status_t MPU6050_StartCapture(void)
+monitoring_status_t MPU6050_StartCapture(void)
 {
-  if (MPU6050_Write(MPU6050_REG_USER_CTRL, MPU6050_USER_RESET) != MPU6050_OK ||
-      MPU6050_Write(MPU6050_REG_FIFO_EN, MPU6050_FIFO_ACCEL_XYZ) != MPU6050_OK ||
-      MPU6050_Write(MPU6050_REG_USER_CTRL, MPU6050_USER_FIFO_ENABLE) != MPU6050_OK)
+  if (MPU6050_Write(MPU6050_REG_USER_CTRL, MPU6050_USER_RESET) != MONITORING_OK ||
+      MPU6050_Write(MPU6050_REG_FIFO_EN, MPU6050_FIFO_ACCEL_XYZ) != MONITORING_OK ||
+      MPU6050_Write(MPU6050_REG_USER_CTRL, MPU6050_USER_FIFO_ENABLE) != MONITORING_OK)
   {
-    return MPU6050_ERROR_BUS;
+    return MONITORING_ERROR_BUS;
   }
 
   g_data_ready_pending = 0U;
-  return MPU6050_OK;
+  return MONITORING_OK;
 }
 
-mpu6050_status_t MPU6050_StopCapture(void)
+monitoring_status_t MPU6050_StopCapture(void)
 {
-  if (MPU6050_Write(MPU6050_REG_FIFO_EN, 0x00U) != MPU6050_OK ||
-      MPU6050_Write(MPU6050_REG_USER_CTRL, MPU6050_USER_FIFO_RESET) != MPU6050_OK)
+  if (MPU6050_Write(MPU6050_REG_FIFO_EN, 0x00U) != MONITORING_OK ||
+      MPU6050_Write(MPU6050_REG_USER_CTRL, MPU6050_USER_FIFO_RESET) != MONITORING_OK)
   {
-    return MPU6050_ERROR_BUS;
+    return MONITORING_ERROR_BUS;
   }
-  return MPU6050_OK;
+  return MONITORING_OK;
 }
 
-mpu6050_status_t MPU6050_ReadFifoCount(uint16_t *count)
+monitoring_status_t MPU6050_ReadFifoCount(uint16_t *count)
 {
   uint8_t data[2];
   uint8_t int_status;
 
   if (count == NULL)
   {
-    return MPU6050_ERROR_ARGUMENT;
+    return MONITORING_ERROR_ARGUMENT;
   }
-  if (MPU6050_Read(MPU6050_REG_INT_STATUS, &int_status, 1U) != MPU6050_OK ||
-      MPU6050_Read(MPU6050_REG_FIFO_COUNTH, data, sizeof(data)) != MPU6050_OK)
+  if (MPU6050_Read(MPU6050_REG_INT_STATUS, &int_status, 1U) != MONITORING_OK ||
+      MPU6050_Read(MPU6050_REG_FIFO_COUNTH, data, sizeof(data)) != MONITORING_OK)
   {
-    return MPU6050_ERROR_BUS;
+    return MONITORING_ERROR_BUS;
   }
 
   if ((int_status & 0x10U) != 0U)
   {
     (void)MPU6050_Write(MPU6050_REG_USER_CTRL, MPU6050_USER_FIFO_RESET);
-    return MPU6050_ERROR_FIFO;
+    return MONITORING_ERROR;
   }
 
   *count = ((uint16_t)data[0] << 8) | data[1];
   if (*count > 1024U)
   {
     (void)MPU6050_Write(MPU6050_REG_USER_CTRL, MPU6050_USER_FIFO_RESET);
-    return MPU6050_ERROR_FIFO;
+    return MONITORING_ERROR;
   }
-  return MPU6050_OK;
+  return MONITORING_OK;
 }
 
-mpu6050_status_t MPU6050_ReadSample(mpu6050_sample_t *sample)
+monitoring_status_t MPU6050_ReadSample(mpu6050_sample_t *sample)
 {
   uint8_t data[6];
 
   if (sample == NULL)
   {
-    return MPU6050_ERROR_ARGUMENT;
+    return MONITORING_ERROR_ARGUMENT;
   }
-  if (MPU6050_Read(MPU6050_REG_FIFO_R_W, data, sizeof(data)) != MPU6050_OK)
+  if (MPU6050_Read(MPU6050_REG_FIFO_R_W, data, sizeof(data)) != MONITORING_OK)
   {
-    return MPU6050_ERROR_BUS;
+    return MONITORING_ERROR_BUS;
   }
 
   sample->x = (int16_t)(((uint16_t)data[0] << 8) | data[1]);
   sample->y = (int16_t)(((uint16_t)data[2] << 8) | data[3]);
   sample->z = (int16_t)(((uint16_t)data[4] << 8) | data[5]);
   g_data_ready_pending = 0U;
-  return MPU6050_OK;
+  return MONITORING_OK;
 }
 
 void MPU6050_NotifyDataReadyFromISR(void)

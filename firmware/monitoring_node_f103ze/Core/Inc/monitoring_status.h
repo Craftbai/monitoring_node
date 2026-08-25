@@ -27,7 +27,7 @@ typedef enum {
   MONITORING_ERROR_CRC,           /* CRC 校验错误 */
   MONITORING_ERROR_ARGUMENT,      /* 参数错误（NULL 指针、非法值） */
   MONITORING_ERROR_NOT_READY,     /* 未就绪（总线/设备未初始化） */
-  MONITORING_ERROR_BUS_ERROR,     /* 总线错误（SPI/I2C 传输失败） */
+  MONITORING_ERROR_BUS,           /* 总线错误（SPI/I2C 传输失败） */
   MONITORING_ERROR_MAX_RETRY      /* 达到最大重试次数 */
 } monitoring_status_t;
 

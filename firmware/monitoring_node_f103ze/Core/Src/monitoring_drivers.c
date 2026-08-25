@@ -23,10 +23,10 @@ void MonitoringDrivers_Init(void) {
   /* ===== 传感器初始化（按通道顺序：温度/振动/电流） ===== */
 
   /* 温度传感器：DS18B20（1-Wire） */
-  g_drivers_status.ds18b20_ready = (DS18B20_Init() == DS18B20_OK) ? 1U : 0U;
+  g_drivers_status.ds18b20_ready = (DS18B20_Init() == MONITORING_OK) ? 1U : 0U;
 
   /* 振动传感器：MPU6050（I2C1） */
-  g_drivers_status.mpu6050_ready = (MPU6050_Init() == MPU6050_OK) ? 1U : 0U;
+  g_drivers_status.mpu6050_ready = (MPU6050_Init() == MONITORING_OK) ? 1U : 0U;
 
   /* 电流传感器：ACS712（ADC1 + TIM3 + DMA） */
   g_drivers_status.adc_ready = (HAL_ADCEx_Calibration_Start(&hadc1) == HAL_OK) ? 1U : 0U;

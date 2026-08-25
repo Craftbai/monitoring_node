@@ -2,17 +2,8 @@
 #define MONITORING_MPU6050_H
 
 #include "stm32f1xx_hal.h"
+#include "monitoring_status.h"
 #include <stdint.h>
-
-typedef enum
-{
-  MPU6050_OK = 0,
-  MPU6050_ERROR_ARGUMENT,
-  MPU6050_ERROR_BUS,
-  MPU6050_ERROR_ID,
-  MPU6050_ERROR_FIFO,
-  MPU6050_ERROR_TIMEOUT
-} mpu6050_status_t;
 
 typedef struct
 {
@@ -27,11 +18,12 @@ typedef struct
 #define MPU6050_SENSOR_RATE_HZ    1000U
 #define MPU6050_SAMPLE_RATE_HZ    800U
 
-mpu6050_status_t MPU6050_Init(void);
-mpu6050_status_t MPU6050_StartCapture(void);
-mpu6050_status_t MPU6050_StopCapture(void);
-mpu6050_status_t MPU6050_ReadFifoCount(uint16_t *count);
-mpu6050_status_t MPU6050_ReadSample(mpu6050_sample_t *sample);
+monitoring_status_t MPU6050_Init(void);
+monitoring_status_t MPU6050_StartCapture(void);
+monitoring_status_t MPU6050_StopCapture(void);
+monitoring_status_t MPU6050_ReadFifoCount(uint16_t *count);
+monitoring_status_t MPU6050_ReadSample(mpu6050_sample_t *sample);
+void MPU6050_NotifyDataReadyFromISR(void);
 void MPU6050_NotifyDataReadyFromISR(void);
 uint8_t MPU6050_DataReadyPending(void);
 

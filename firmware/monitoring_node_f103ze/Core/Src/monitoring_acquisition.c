@@ -177,7 +177,7 @@ uint32_t MonitoringAcquisition_Capture(monitor_sample_block_t *block)
    * 如果启动失败（传感器未响应），直接标记为 INVALID + MISSING，
    * temperature_done 置 1 表示此通道不再参与后续轮询。 */
   temperature_status = DS18B20_StartTemperatureConversion();
-  temperature_conversion_started = (temperature_status == DS18B20_OK) ? 1U : 0U;
+  temperature_conversion_started = (temperature_status == MONITORING_OK) ? 1U : 0U;
   temperature_done = (temperature_conversion_started == 0U) ? 1U : 0U;
   temperature_start_tick = HAL_GetTick();
   temperature_poll_tick = temperature_start_tick;
@@ -188,7 +188,7 @@ uint32_t MonitoringAcquisition_Capture(monitor_sample_block_t *block)
 
   /* 振动：启动 MPU6050 FIFO 采集。
    * 如果启动失败（传感器未初始化或通信错误），标记为 INVALID + MISSING。 */
-  if (g_mpu_ready == 0U || MPU6050_StartCapture() != MPU6050_OK)
+  if (g_mpu_ready == 0U || MPU6050_StartCapture() != MONITORING_OK)
   {
     block->flags |= MONITOR_SAMPLE_FLAG_VIB_INVALID | MONITOR_SAMPLE_FLAG_VIB_MISSING;
   }
@@ -252,12 +252,12 @@ uint32_t MonitoringAcquisition_Capture(monitor_sample_block_t *block)
       if (DS18B20_ConversionReady() != 0U)
       {
         temperature_done = 1U;
-        temperature_status = DS18B20_OK;
+        temperature_status = MONITORING_OK;
       }
       else if ((HAL_GetTick() - temperature_start_tick) > 800U)
       {
         temperature_done = 1U;
-        temperature_status = DS18B20_ERROR_TIMEOUT;
+        temperature_status = MONITORING_ERROR_TIMEOUT;
       }
     }
 
@@ -320,7 +320,7 @@ uint32_t MonitoringAcquisition_Capture(monitor_sample_block_t *block)
       }
 
       /* 读取 FIFO 计数，检查溢出和对齐 */
-      if (MPU6050_ReadFifoCount(&fifo_count) != MPU6050_OK)
+      if (MPU6050_ReadFifoCount(&fifo_count) != MONITORING_OK)
       {
         block->flags |= MONITOR_SAMPLE_FLAG_VIB_INVALID | MONITOR_SAMPLE_FLAG_OVERFLOW;
         (void)MPU6050_StopCapture();
@@ -340,7 +340,7 @@ uint32_t MonitoringAcquisition_Capture(monitor_sample_block_t *block)
          while (fifo_count >= 6U &&
                 vibration_source_count < MONITOR_VIBRATION_SOURCE_SAMPLES)
          {
-          if (MPU6050_ReadSample(&sample) != MPU6050_OK)
+          if (MPU6050_ReadSample(&sample) != MONITORING_OK)
           {
             block->flags |= MONITOR_SAMPLE_FLAG_VIB_INVALID;
             (void)MPU6050_StopCapture();
@@ -417,17 +417,17 @@ uint32_t MonitoringAcquisition_Capture(monitor_sample_block_t *block)
   /* 温度：读取最终结果（如果转换成功但读取失败，也标记为 INVALID） */
   if (temperature_conversion_started != 0U && temperature_done == 0U)
   {
-    temperature_status = DS18B20_ERROR_TIMEOUT;
+    temperature_status = MONITORING_ERROR_TIMEOUT;
     temperature_done = 1U;
   }
   if (temperature_conversion_started != 0U && temperature_done != 0U &&
-      temperature_status == DS18B20_OK)
+      temperature_status == MONITORING_OK)
   {
     temperature_status = DS18B20_ReadTemperatureRaw(&temperature_raw);
   }
   if (temperature_conversion_started != 0U)
   {
-    if (temperature_status == DS18B20_OK)
+    if (temperature_status == MONITORING_OK)
     {
       /* DS18B20 原始值的 LSB 为 1/16 摄氏度，统一转换为 0.01 摄氏度。 */
       block->temperature_centi = (int16_t)(((int32_t)temperature_raw * 100) / 16);
@@ -497,7 +497,7 @@ uint8_t MonitoringAcquisition_Stop(void)
 #endif
   if (g_mpu_ready != 0U)
   {
-    if (MPU6050_StopCapture() != MPU6050_OK)
+    if (MPU6050_StopCapture() != MONITORING_OK)
     {
       status = 0U;
     }
@@ -546,7 +546,7 @@ uint8_t MonitoringAcquisition_Resume(void)
 
   /* MPU6050 重新初始化（Stop 唤醒后 I2C 通信可能需要重新握手） */
   mpu_status = MPU6050_Init();
-  g_mpu_ready = (mpu_status == MPU6050_OK) ? 1U : 0U;
+  g_mpu_ready = (mpu_status == MONITORING_OK) ? 1U : 0U;
 
   /* 传感器缺失属于通道降级，不应阻止基础外设恢复和下一周期运行。
    * 只有 ADC 校准失败才返回失败（基础外设故障）。 */
