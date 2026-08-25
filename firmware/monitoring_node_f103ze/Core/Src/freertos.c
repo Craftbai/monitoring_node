@@ -96,7 +96,7 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* 应用任务使用静态控制块和静态栈，避免运行期依赖 FreeRTOS 堆。 */
+  /* 应用任务、队列、事件组、信号量均由 osXXXNew 从 FreeRTOS 堆动态分配；仅采样块池为静态。 */
   MonitoringTasks_Create();
   /* USER CODE END RTOS_THREADS */
 

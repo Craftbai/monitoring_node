@@ -5,7 +5,7 @@
  *
  * 分区结构：
  *   1/7: NRF24 上报（载荷编码 + 板级 CS/CE 回调）
- *   2/7: 固定静态资源（块池、队列、事件组、任务 CB/栈、信号量）
+ *   2/7: 固定静态资源（块池、队列、事件组、信号量）；任务 CB/栈走堆
  *   3/7: 日志与健康（LogLock 宏、g_health、状态文本）
  *   4/7: 通用创建辅助（CreateQueue / CreateThread）
  *   5/7: Stop 门禁与采样块所有权（RearmRtcAlarm/EnterStop/ReturnSampleBlock）
@@ -117,7 +117,7 @@ static uint8_t MonitoringTasks_BuildNrf24Payload(
 #endif
 
 /* =============================================================================
- * 分区 2/7: 固定静态资源（块池、队列、事件组、任务 CB/栈、信号量）
+ * 分区 2/7: 固定静态资源（块池、队列、事件组、信号量）；任务 CB/栈走堆
  *
  * 数据流水线（单周期完整路径）：
  *   [RTC 闹钟中断]
@@ -223,23 +223,7 @@ static uint8_t g_sample_ready_queue_mem[sizeof(monitor_sample_block_t *) * MONIT
 static uint8_t g_result_queue_mem[sizeof(monitor_cycle_result_t) * MONITOR_QUEUE_DEPTH]
   __attribute__((aligned(4)));
 
-/* 任务控制块 */
-static StaticTask_t g_acquisition_task_cb;
-static StaticTask_t g_processing_task_cb;
-static StaticTask_t g_report_task_cb;
-static StaticTask_t g_health_task_cb;
-static StaticTask_t g_cycle_task_cb;
-static StaticTask_t g_watchdog_task_cb;
-
-/* 任务栈 */
-static StackType_t g_acquisition_task_stack[256];
-static StackType_t g_processing_task_stack[256];
-static StackType_t g_report_task_stack[192];
-static StackType_t g_health_task_stack[192];
-static StackType_t g_cycle_task_stack[256];
-static StackType_t g_watchdog_task_stack[160];
-
-/* 任务句柄 */
+/* 任务句柄（动态分配：TCB 与栈由 osThreadNew 从 FreeRTOS 堆申请） */
 static osThreadId_t g_acquisition_task;
 static osThreadId_t g_processing_task;
 static osThreadId_t g_report_task;
@@ -368,28 +352,23 @@ static osMessageQueueId_t MonitoringTasks_CreateQueue(uint32_t count,
 }
 
 /**
- * @brief  创建静态任务线程
+ * @brief  创建动态任务线程
  * @param  name: 任务名称（用于调试）
  * @param  function: 任务入口函数
  * @param  priority: 任务优先级
- * @param  control_block: 静态控制块指针
- * @param  stack: 任务栈指针
- * @param  stack_words: 栈大小（单位：StackType_t）
+ * @param  stack_bytes: 栈大小（单位：字节）
  * @return 任务句柄，失败返回 NULL
+ * @note   不传 cb_mem/stack_mem，TCB 与栈由 osThreadNew 从 FreeRTOS 堆分配。
+ *         osThreadNew 内部按 sizeof(StackType_t) 将字节数换算为栈字。
  */
 static osThreadId_t MonitoringTasks_CreateThread(const char *name,
                                                   osThreadFunc_t function,
                                                   osPriority_t priority,
-                                                  StaticTask_t *control_block,
-                                                  StackType_t *stack,
-                                                  uint32_t stack_words)
+                                                  uint32_t stack_bytes)
 {
   const osThreadAttr_t attributes = {
     .name = name,
-    .cb_mem = control_block,
-    .cb_size = sizeof(*control_block),
-    .stack_mem = stack,
-    .stack_size = stack_words * sizeof(StackType_t),
+    .stack_size = stack_bytes,
     .priority = priority
   };
 
@@ -1331,7 +1310,8 @@ void MonitoringTasks_Create(void)
    * 第 6 步：创建 6 个任务（按优先级从高到低）
    * ═══════════════════════════════════════════════════════════════════
    * 任务优先级决定抢占关系：高(48) > 中高(40) > 中(24) > 中低(16) > 低(8)
-   * 所有任务使用静态分配（预分配控制块和栈），避免运行期依赖堆。
+   * 任务 TCB 与栈由 osThreadNew 从 FreeRTOS 堆动态分配，创建一次后常驻；
+   * 队列/块池/信号量/事件组仍为静态分配（固定 SRAM 预算，避免热路径 malloc）。
    */
 
   /*
@@ -1357,8 +1337,7 @@ void MonitoringTasks_Create(void)
    */
   g_acquisition_task = MonitoringTasks_CreateThread(
     "acquisition_task", MonitoringTasks_AcquisitionTask, osPriorityHigh,
-    &g_acquisition_task_cb, g_acquisition_task_stack,
-    sizeof(g_acquisition_task_stack) / sizeof(g_acquisition_task_stack[0]));
+    256U * sizeof(StackType_t));
 
   /*
    * 【任务 2】ProcessingTask - 处理任务
@@ -1383,8 +1362,7 @@ void MonitoringTasks_Create(void)
    */
   g_processing_task = MonitoringTasks_CreateThread(
     "processing_task", MonitoringTasks_ProcessingTask, osPriorityAboveNormal,
-    &g_processing_task_cb, g_processing_task_stack,
-    sizeof(g_processing_task_stack) / sizeof(g_processing_task_stack[0]));
+    256U * sizeof(StackType_t));
 
   /*
    * 【任务 3】ReportTask - 上报任务
@@ -1406,8 +1384,7 @@ void MonitoringTasks_Create(void)
    */
   g_report_task = MonitoringTasks_CreateThread(
     "report_task", MonitoringTasks_ReportTask, osPriorityBelowNormal,
-    &g_report_task_cb, g_report_task_stack,
-    sizeof(g_report_task_stack) / sizeof(g_report_task_stack[0]));
+    192U * sizeof(StackType_t));
 
   /*
    * 【任务 4】CycleTask - 周期协调任务
@@ -1434,8 +1411,7 @@ void MonitoringTasks_Create(void)
    */
   g_cycle_task = MonitoringTasks_CreateThread(
     "cycle_task", MonitoringTasks_RunCycleTask, osPriorityNormal,
-    &g_cycle_task_cb, g_cycle_task_stack,
-    sizeof(g_cycle_task_stack) / sizeof(g_cycle_task_stack[0]));
+    256U * sizeof(StackType_t));
 
   /*
    * 【任务 5】HealthTask - 健康监测任务
@@ -1459,8 +1435,7 @@ void MonitoringTasks_Create(void)
    */
   g_health_task = MonitoringTasks_CreateThread(
     "health_task", MonitoringTasks_HealthTask, osPriorityLow,
-    &g_health_task_cb, g_health_task_stack,
-    sizeof(g_health_task_stack) / sizeof(g_health_task_stack[0]));
+    192U * sizeof(StackType_t));
 
   /*
    * 【任务 6】WatchdogTask - 看门狗任务
@@ -1488,20 +1463,19 @@ void MonitoringTasks_Create(void)
    */
   g_watchdog_task = MonitoringTasks_CreateThread(
     "watchdog_task", MonitoringTasks_WatchdogTask, osPriorityLow,
-    &g_watchdog_task_cb, g_watchdog_task_stack,
-    sizeof(g_watchdog_task_stack) / sizeof(g_watchdog_task_stack[0]));
+    160U * sizeof(StackType_t));
 
   /* ═══════════════════════════════════════════════════════════════════
    * 失败检查：6 个任务全部创建成功才继续
    * ═══════════════════════════════════════════════════════════════════
-   * 静态分配理论不会失败（栈和控制块在编译时已分配），
-   * 但保留检查以防配置错误（如栈大小写错、控制块冲突）。
+   * 动态分配会真实失败（堆不足时返回 NULL），打印剩余堆便于定位。
    */
   if (g_acquisition_task == NULL || g_processing_task == NULL ||
       g_report_task == NULL || g_health_task == NULL || g_cycle_task == NULL ||
       g_watchdog_task == NULL)
   {
-    UART_Log("[RTOS] task pipeline thread creation failed\r\n");
+    UART_Log("[RTOS] task pipeline thread creation failed; free heap=%lu bytes\r\n",
+             (unsigned long)xPortGetFreeHeapSize());
     g_health.state = MONITOR_STATE_FAULT;
     return;
   }
