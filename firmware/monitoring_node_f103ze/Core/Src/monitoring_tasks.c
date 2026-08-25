@@ -51,7 +51,7 @@ extern void SystemClock_Config(void);
  * @brief  NRF24 片选控制回调
  * @param  active: 1=拉低 CSN（选中），0=拉高 CSN（释放）
  */
-static void MonitoringTasks_Nrf24ChipSelect(uint8_t active)
+void MonitoringTasks_Nrf24ChipSelect(uint8_t active)
 {
   HAL_GPIO_WritePin(NRF24_CSN_GPIO_Port, NRF24_CSN_Pin,
                     active != 0U ? GPIO_PIN_RESET : GPIO_PIN_SET);
@@ -61,7 +61,7 @@ static void MonitoringTasks_Nrf24ChipSelect(uint8_t active)
  * @brief  NRF24 使能控制回调
  * @param  active: 1=拉高 CE（使能发送/接收），0=拉低 CE（待机）
  */
-static void MonitoringTasks_Nrf24ChipEnable(uint8_t active)
+void MonitoringTasks_Nrf24ChipEnable(uint8_t active)
 {
   HAL_GPIO_WritePin(NRF24_CE_GPIO_Port, NRF24_CE_Pin,
                     active != 0U ? GPIO_PIN_SET : GPIO_PIN_RESET);
@@ -734,7 +734,7 @@ static void MonitoringTasks_ReportTask(void *argument)
  */
 static void MonitoringTasks_HealthTask(void *argument)
 {
-  monitoring_spi_status_t spi_status;
+  monitoring_bus_status_t spi_status;
   (void)argument;
 
   for (;;)

@@ -238,6 +238,16 @@ void MonitoringTasks_Create(void);
 void MonitoringTasks_RunCycleTask(void *argument);
 
 /* ========================================================================
+ * NRF24 回调接口：由 monitoring_drivers 使用，控制 CSN/CE 引脚
+ * ======================================================================== */
+
+/* NRF24 片选控制（CSN 引脚） */
+void MonitoringTasks_Nrf24ChipSelect(uint8_t active);
+
+/* NRF24 使能控制（CE 引脚） */
+void MonitoringTasks_Nrf24ChipEnable(uint8_t active);
+
+/* ========================================================================
  * 中断回调接口：由驱动层和 HAL 回调调用，只发布事件不阻塞
  * ======================================================================== */
 
