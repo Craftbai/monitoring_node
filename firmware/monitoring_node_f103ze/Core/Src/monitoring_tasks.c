@@ -501,7 +501,7 @@ static uint8_t MonitoringTasks_EnterStop(void)
     g_health.rtc_alarm_errors++;
     return 0U;
   }
-  (void)MonitoringNrf24_Init();
+  /* NRF24 已在 MonitoringDrivers_Resume() 中重新初始化 */
   g_health.stop_wakeups++;
   g_watchdog_last_progress_tick = HAL_GetTick();
   g_health.state = MONITOR_STATE_IDLE;

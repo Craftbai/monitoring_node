@@ -6,6 +6,7 @@
 #include "monitoring_ds18b20.h"
 #include "monitoring_mpu6050.h"
 #include "adc.h"
+#include "tim.h"
 #include "monitoring_nrf24.h"
 #include "monitoring_hw_watchdog.h"
 #include "monitoring_bus.h"
@@ -53,5 +54,65 @@ void MonitoringDrivers_Init(void) {
 void MonitoringDrivers_GetStatus(monitoring_drivers_status_t *status) {
   if (status != NULL) {
     *status = g_drivers_status;
+  }
+}
+
+/**
+ * @brief  Stop 模式唤醒后恢复所有传感器和模块
+ * @note   重新初始化所有外设和传感器
+ * @retval 1: 恢复成功，0: 恢复失败（ADC 校准失败）
+ */
+uint8_t MonitoringDrivers_Resume(void) {
+  HAL_StatusTypeDef adc_status;
+
+  /* ===== 1. 恢复通信接口 ===== */
+  /* I2C 和 SPI 在 Stop 唤醒后可能需要重新配置 */
+  MonitoringBus_Init();
+
+  /* ===== 2. 重新初始化传感器（按通道顺序） ===== */
+
+  /* 温度传感器：DS18B20 */
+  g_drivers_status.ds18b20_ready = (DS18B20_Init() == MONITORING_OK) ? 1U : 0U;
+
+  /* 振动传感器：MPU6050 */
+  g_drivers_status.mpu6050_ready = (MPU6050_Init() == MONITORING_OK) ? 1U : 0U;
+
+  /* 电流传感器：ADC1 重新校准 */
+  HAL_ADC_DeInit(&hadc1);
+  MX_ADC1_Init();
+  adc_status = HAL_ADCEx_Calibration_Start(&hadc1);
+  g_drivers_status.adc_ready = (adc_status == HAL_OK) ? 1U : 0U;
+
+  /* ===== 3. 重新初始化无线模块 ===== */
+  g_drivers_status.nrf24_ready = (MonitoringNrf24_Init() == MONITOR_NRF24_OK) ? 1U : 0U;
+
+  /* ===== 4. 恢复定时器 ===== */
+  MX_TIM3_Init();
+
+  /* ===== 5. 硬件看门狗不需要重新初始化（独立运行） ===== */
+
+  /* ADC 校准失败视为致命错误，其他传感器失败允许降级运行 */
+  return (adc_status == HAL_OK) ? 1U : 0U;
+}
+
+/**
+ * @brief  查询指定驱动是否就绪
+ * @param  type: 驱动类型
+ * @retval 1: 就绪，0: 未就绪
+ */
+uint8_t MonitoringDrivers_IsReady(monitoring_driver_type_t type) {
+  switch (type) {
+    case DRIVER_DS18B20:
+      return g_drivers_status.ds18b20_ready;
+    case DRIVER_MPU6050:
+      return g_drivers_status.mpu6050_ready;
+    case DRIVER_ADC:
+      return g_drivers_status.adc_ready;
+    case DRIVER_NRF24:
+      return g_drivers_status.nrf24_ready;
+    case DRIVER_IWDG:
+      return g_drivers_status.iwdg_ready;
+    default:
+      return 0U;
   }
 }

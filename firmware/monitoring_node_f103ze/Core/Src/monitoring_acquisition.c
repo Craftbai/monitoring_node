@@ -38,6 +38,7 @@
 
 #include "adc.h"
 #include "monitoring_ds18b20.h"
+#include "monitoring_drivers.h"
 #include "i2c.h"
 #include "monitoring_mpu6050.h"
 #include "monitoring_nrf24.h"
@@ -81,9 +82,6 @@ static uint8_t g_adc_calibrated;
 /* ADC 捕获活动标志（用于 Stop 门禁检查：只停止确实启动过的 DMA） */
 static uint8_t g_adc_capture_active;
 #endif
-
-/* MPU6050 就绪状态（Init 成功后置 1，Stop 后清零，Resume 后重新初始化） */
-static uint8_t g_mpu_ready;
 
 /* ===== 内部辅助函数 ===== */
 
@@ -188,7 +186,7 @@ uint32_t MonitoringAcquisition_Capture(monitor_sample_block_t *block)
 
   /* 振动：启动 MPU6050 FIFO 采集。
    * 如果启动失败（传感器未初始化或通信错误），标记为 INVALID + MISSING。 */
-  if (g_mpu_ready == 0U || MPU6050_StartCapture() != MONITORING_OK)
+  if (!MonitoringDrivers_IsReady(DRIVER_MPU6050) || MPU6050_StartCapture() != MONITORING_OK)
   {
     block->flags |= MONITOR_SAMPLE_FLAG_VIB_INVALID | MONITOR_SAMPLE_FLAG_VIB_MISSING;
   }
@@ -476,7 +474,6 @@ uint32_t MonitoringAcquisition_Capture(monitor_sample_block_t *block)
  *
  * @note   Stop 门禁检查的一部分，失败时拒绝进入 Stop 模式
  * @note   只有本周期确实启动过 DMA，才检查 HAL 返回值（避免误判）
- * @note   停止后将 g_mpu_ready 清零，Resume 时会重新初始化
  */
 uint8_t MonitoringAcquisition_Stop(void)
 {
@@ -495,15 +492,13 @@ uint8_t MonitoringAcquisition_Stop(void)
   }
   g_adc_capture_active = 0U;
 #endif
-  if (g_mpu_ready != 0U)
+  if (MonitoringDrivers_IsReady(DRIVER_MPU6050))
   {
     if (MPU6050_StopCapture() != MONITORING_OK)
     {
       status = 0U;
     }
   }
-  /* 清零 g_mpu_ready，Resume 时会重新初始化 */
-  g_mpu_ready = 0U;
   return status;
 }
 
@@ -511,47 +506,33 @@ uint8_t MonitoringAcquisition_Stop(void)
  * @brief  Stop 唤醒后恢复采集外设
  * @return 1=成功恢复，0=恢复失败
  *
- * @note   恢复流程: DeInit 旧状态 → MX_*_Init 重新配置 → ADC 校准 → MPU6050 初始化
- * @note   为什么要 DeInit：Stop 模式会关闭外设时钟，直接 Init 可能状态不一致
+ * @note   统一由 MonitoringDrivers_Resume() 管理所有传感器的恢复
  * @note   传感器缺失不会导致恢复失败（属于通道降级，不阻止下一周期运行）
  * @note   ADC 校准失败会导致恢复失败（基础外设故障）
  */
 uint8_t MonitoringAcquisition_Resume(void)
 {
-  HAL_StatusTypeDef adc_calibration_status;
-  monitoring_status_t mpu_status;
+  uint8_t result;
 
-  /* Stop 后先释放旧的外设状态，再重新套用 CubeMX 生成的参数。
-   * 顺序：DeInit → Init，确保寄存器从已知状态开始配置。 */
+  /* 重新初始化 I2C（MPU6050 依赖） */
   (void)HAL_I2C_DeInit(&hi2c1);
-  (void)HAL_ADC_Stop_DMA(&hadc1);
-  (void)HAL_ADC_DeInit(&hadc1);
-  (void)HAL_TIM_Base_DeInit(&htim3);
-
-  /* 重新初始化外设（调用 CubeMX 生成的 MX_*_Init 函数） */
   MX_I2C1_Init();
-  MX_ADC1_Init();
 
+  /* 统一恢复所有传感器和模块 */
+  result = MonitoringDrivers_Resume();
+
+  /* 更新本地状态变量（用于采集流程判断） */
 #if MONITOR_CURRENT_SENSOR_ENABLED
-  /* ADC 校准：F103 的 ADC 需要在每次上电后校准 */
-  adc_calibration_status = HAL_ADCEx_Calibration_Start(&hadc1);
-  g_adc_calibrated = (adc_calibration_status == HAL_OK) ? 1U : 0U;
+  g_adc_calibrated = MonitoringDrivers_IsReady(DRIVER_ADC);
   g_adc_capture_active = 0U;
-#else
-  /* 电流通道关闭时，ADC 只是保留配置，不应阻止 Stop 唤醒后的恢复。 */
-  adc_calibration_status = HAL_OK;
 #endif
-
-  MX_TIM3_Init();
-
-  /* MPU6050 重新初始化（Stop 唤醒后 I2C 通信可能需要重新握手） */
-  mpu_status = MPU6050_Init();
-  g_mpu_ready = (mpu_status == MONITORING_OK) ? 1U : 0U;
 
   /* 传感器缺失属于通道降级，不应阻止基础外设恢复和下一周期运行。
    * 只有 ADC 校准失败才返回失败（基础外设故障）。 */
-  return (adc_calibration_status == HAL_OK) ? 1U : 0U;
+  return result;
 }
+
+/* ===== HAL 回调函数（中断上下文） ===== */
 
 /* ===== HAL 回调函数（中断上下文） ===== */
 

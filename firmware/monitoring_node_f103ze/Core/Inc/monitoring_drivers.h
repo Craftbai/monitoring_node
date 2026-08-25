@@ -19,6 +19,17 @@ extern "C" {
 #endif
 
 /**
+ * @brief  驱动类型枚举（用于状态查询）
+ */
+typedef enum {
+  DRIVER_DS18B20,       /* 温度传感器 */
+  DRIVER_MPU6050,       /* 振动传感器 */
+  DRIVER_ADC,           /* 电流传感器（ADC） */
+  DRIVER_NRF24,         /* 无线模块 */
+  DRIVER_IWDG           /* 硬件看门狗 */
+} monitoring_driver_type_t;
+
+/**
  * @brief  驱动就绪状态
  */
 typedef struct {
@@ -37,10 +48,25 @@ typedef struct {
 void MonitoringDrivers_Init(void);
 
 /**
+ * @brief  Stop 模式唤醒后恢复所有传感器和模块
+ * @note   重新初始化所有外设和传感器
+ * @note   统一管理 Stop 唤醒后的恢复逻辑
+ * @retval 1: 恢复成功，0: 恢复失败（ADC 校准失败）
+ */
+uint8_t MonitoringDrivers_Resume(void);
+
+/**
  * @brief  获取驱动就绪状态
  * @param  status: 输出状态结构体
  */
 void MonitoringDrivers_GetStatus(monitoring_drivers_status_t *status);
+
+/**
+ * @brief  查询指定驱动是否就绪
+ * @param  type: 驱动类型
+ * @retval 1: 就绪，0: 未就绪
+ */
+uint8_t MonitoringDrivers_IsReady(monitoring_driver_type_t type);
 
 #ifdef __cplusplus
 }
