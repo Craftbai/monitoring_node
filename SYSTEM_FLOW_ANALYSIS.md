@@ -188,7 +188,7 @@ void MonitoringTasks_Create(void) {
   // 7. 初始化告警系统
   MonitoringAlerts_Init();
 
-  // 8. 创建 6 个任务（静态分配）
+  // 8. 创建 6 个任务（动态分配：TCB 与栈来自 FreeRTOS 堆）
   g_acquisition_task = osThreadNew(MonitoringTasks_AcquisitionTask, NULL, &acquisition_task_attr);
   g_processing_task  = osThreadNew(MonitoringTasks_ProcessingTask,  NULL, &processing_task_attr);
   g_report_task      = osThreadNew(MonitoringTasks_ReportTask,      NULL, &report_task_attr);
