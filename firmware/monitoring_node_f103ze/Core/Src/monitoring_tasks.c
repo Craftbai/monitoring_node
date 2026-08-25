@@ -1187,14 +1187,27 @@ void MonitoringTasks_Create(void)
   };
   g_report_done_sem = osSemaphoreNew(1U, 0U, &report_done_sem_attributes);
 
-  /* ===== 第 3 步：创建消息队列 ===== */
-  /* 队列必须在任务创建前就绪，任务启动后会立即调用 osMessageQueueGet。
+  /* ═══════════════════════════════════════════════════════════════════
+   * 第 4 步：创建消息队列（4 个队列，构成数据流水线）
+   * ═══════════════════════════════════════════════════════════════════
+   * 队列必须在任务创建前就绪，任务启动后会立即调用 osMessageQueueGet。
    * 所有队列使用静态分配（预分配控制块和存储区），避免运行期依赖堆。
-   *
-   * g_cycle_request_queue (深度 2, 元素 sizeof(monitor_cycle_request_t))
-   *   - 生产者: cycle_task（RTC 闹钟触发后放入）
-   *   - 消费者: acquisition_task（阻塞等待）
-   *   - 用途: 传递周期 ID 和时间戳，触发新一轮采集
+   * 队列深度统一为 2：支持双缓冲流水线（一个在处理，一个在采集）
+   */
+
+  /*
+   * 【队列 1】g_cycle_request_queue
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 用途：CycleTask 通知 AcquisitionTask 开始新周期采集         │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 队列深度：2                                                  │
+   * │ 元素大小：sizeof(monitor_cycle_request_t)                   │
+   * │ 传递数据：cycle_id（周期ID）+ timestamp_ticks（时间戳）     │
+   * │ 数据流向：CycleTask → [队列] → AcquisitionTask              │
+   * │                                                              │
+   * │ 生产者：CycleTask（收到 RTC 闹钟事件后）                    │
+   * │ 消费者：AcquisitionTask（阻塞等待，开始采集）               │
+   * └─────────────────────────────────────────────────────────────┘
    */
   g_cycle_request_queue = MonitoringTasks_CreateQueue(
     MONITOR_QUEUE_DEPTH,
@@ -1205,11 +1218,19 @@ void MonitoringTasks_Create(void)
     "cycleRequestQ");
 
   /*
-   * g_sample_free_queue (深度 2, 元素 sizeof(monitor_sample_block_t *))
-   *   - 初始化时: 将块池中所有空块指针预填充到此队列
-   *   - 生产者: processing_task（处理完成后归还）
-   *   - 消费者: acquisition_task（采集前取块，100ms 超时）
-   *   - 用途: 管理采样块所有权，避免并发覆盖
+   * 【队列 2】g_sample_free_queue（采样块池）
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 用途：管理空闲采样块，实现块池化（避免动态分配）            │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 队列深度：2                                                  │
+   * │ 元素大小：sizeof(monitor_sample_block_t *)（指针）          │
+   * │ 块大小：~8KB（1024点×3轴振动 + 1024点电流 + 温度）          │
+   * │                                                              │
+   * │ 块流转：初始化→free队列→AcquisitionTask取块→填充→          │
+   * │         sample_ready队列→ProcessingTask处理→归还free队列    │
+   * │                                                              │
+   * │ 为什么用块池：采样块很大，避免 malloc/free，固定 2 个块     │
+   * └─────────────────────────────────────────────────────────────┘
    */
   g_sample_free_queue = MonitoringTasks_CreateQueue(
     MONITOR_QUEUE_DEPTH,
@@ -1220,11 +1241,19 @@ void MonitoringTasks_Create(void)
     "sampleFreeQ");
 
   /*
-   * g_sample_ready_queue (深度 2, 元素 sizeof(monitor_sample_block_t *))
-   *   - 生产者: acquisition_task（采集完成后放入）
-   *   - 消费者: processing_task（阻塞等待）
-   *   - 用途: 传递已填充的采样块指针
-   *   - 深度 2 允许采集提前一个周期（前一个还在处理时新周期已采集）
+   * 【队列 3】g_sample_ready_queue
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 用途：AcquisitionTask 传递采样块给 ProcessingTask           │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 队列深度：2                                                  │
+   * │ 元素大小：sizeof(monitor_sample_block_t *)（指针）          │
+   * │ 数据流向：AcquisitionTask → [队列] → ProcessingTask         │
+   * │                                                              │
+   * │ 采样块内容：温度1点 + 振动1024×3轴 + 电流1024点             │
+   * │                                                              │
+   * │ 生产者：AcquisitionTask（采集完成后放入）                   │
+   * │ 消费者：ProcessingTask（阻塞等待，执行FFT/RMS/告警）        │
+   * └─────────────────────────────────────────────────────────────┘
    */
   g_sample_ready_queue = MonitoringTasks_CreateQueue(
     MONITOR_QUEUE_DEPTH,
@@ -1235,11 +1264,19 @@ void MonitoringTasks_Create(void)
     "sampleReadyQ");
 
   /*
-   * g_result_queue (深度 2, 元素 sizeof(monitor_cycle_result_t))
-   *   - 生产者: processing_task（算法完成后放入，100ms 超时）
-   *   - 消费者: report_task（阻塞等待）
-   *   - 用途: 传递周期结果（特征值、告警状态、处理耗时）
-   *   - 注意: 传递的是结构体本身（值拷贝），不是指针
+   * 【队列 4】g_result_queue
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 用途：ProcessingTask 传递处理结果给 ReportTask              │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 队列深度：2                                                  │
+   * │ 元素大小：sizeof(monitor_cycle_result_t)（值拷贝）          │
+   * │ 数据流向：ProcessingTask → [队列] → ReportTask              │
+   * │                                                              │
+   * │ 结果内容：温度+振动RMS+电流+告警状态+处理时间               │
+   * │                                                              │
+   * │ 生产者：ProcessingTask（算法处理完成后）                    │
+   * │ 消费者：ReportTask（阻塞等待，UART+NRF24上报）              │
+   * └─────────────────────────────────────────────────────────────┘
    */
   g_result_queue = MonitoringTasks_CreateQueue(
     MONITOR_QUEUE_DEPTH,
@@ -1278,15 +1315,33 @@ void MonitoringTasks_Create(void)
     }
   }
 
-  /* ===== 第 5 步：创建任务（按依赖顺序） ===== */
-  /* 任务优先级决定抢占关系：
-   *   高 > 中高 > 中 > 中低 > 低
+  /* ═══════════════════════════════════════════════════════════════════
+   * 第 6 步：创建 6 个任务（按优先级从高到低）
+   * ═══════════════════════════════════════════════════════════════════
+   * 任务优先级决定抢占关系：高(48) > 中高(40) > 中(24) > 中低(16) > 低(8)
    * 所有任务使用静态分配（预分配控制块和栈），避免运行期依赖堆。
-   *
-   * acquisition_task (osPriorityHigh, 栈 256 words = 1024 字节)
-   *   - 最高优先级，确保采集窗口不被其他任务打断
-   *   - 职责: 等待周期请求 → 取空块 → 采集三通道 → 放 ready 队列
-   *   - 栈需求: I2C 驱动 + FIFO 读取 + DMA 控制
+   */
+
+  /*
+   * 【任务 1】AcquisitionTask - 采集任务
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 优先级：48（osPriorityHigh）- 最高                          │
+   * │ 栈大小：1024 字节                                            │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 职责：周期性采集温度、振动、电流三通道数据                  │
+   * │                                                              │
+   * │ 工作流程：                                                   │
+   * │   1. osMessageQueueGet(cycle_request_queue) [阻塞等待]      │
+   * │   2. osMessageQueueGet(sample_free_queue) [取空闲块]        │
+   * │   3. MonitoringAcquisition_Capture(block) [采集 2.5s]       │
+   * │      ├─ DS18B20 温度（750 ms）                              │
+   * │      ├─ MPU6050 振动（1280 ms，1024点×3轴）                │
+   * │      └─ ADC 电流（1024 ms，1024点）                         │
+   * │   4. osMessageQueuePut(sample_ready_queue) [交给处理]       │
+   * │   5. 循环到步骤 1                                            │
+   * │                                                              │
+   * │ 为什么优先级最高：确保采集窗口不被打断，保证数据完整性      │
+   * └─────────────────────────────────────────────────────────────┘
    */
   g_acquisition_task = MonitoringTasks_CreateThread(
     "acquisition_task", MonitoringTasks_AcquisitionTask, osPriorityHigh,
@@ -1294,10 +1349,25 @@ void MonitoringTasks_Create(void)
     sizeof(g_acquisition_task_stack) / sizeof(g_acquisition_task_stack[0]));
 
   /*
-   * processing_task (osPriorityAboveNormal, 栈 256 words = 1024 字节)
-   *   - 中高优先级，低于采集但高于上报和周期协调
-   *   - 职责: 等待 ready 块 → CMSIS-DSP 算法 → 放 result 队列 → 归还块
-   *   - 栈需求: Q15 FFT 工作区（已静态分配到全局）+ 函数调用栈
+   * 【任务 2】ProcessingTask - 处理任务
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 优先级：40（osPriorityAboveNormal）- 中高                   │
+   * │ 栈大小：1024 字节                                            │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 职责：执行信号处理算法和告警评估                             │
+   * │                                                              │
+   * │ 工作流程：                                                   │
+   * │   1. osMessageQueueGet(sample_ready_queue) [阻塞等待]       │
+   * │   2. MonitoringAlgorithm_Process(block, &result) [~100ms]   │
+   * │      ├─ 振动：去直流→Q15→汉宁窗→FFT→RMS→频段能量            │
+   * │      ├─ 电流：去直流→Q15→RMS                                │
+   * │      └─ 告警：评估各通道→更新状态机                         │
+   * │   3. osMessageQueuePut(result_queue) [交给上报]             │
+   * │   4. osMessageQueuePut(sample_free_queue) [归还块]          │
+   * │   5. 循环到步骤 1                                            │
+   * │                                                              │
+   * │ 为什么优先级中高：FFT 计算需要优先完成，但可被采集打断      │
+   * └─────────────────────────────────────────────────────────────┘
    */
   g_processing_task = MonitoringTasks_CreateThread(
     "processing_task", MonitoringTasks_ProcessingTask, osPriorityAboveNormal,
@@ -1305,10 +1375,22 @@ void MonitoringTasks_Create(void)
     sizeof(g_processing_task_stack) / sizeof(g_processing_task_stack[0]));
 
   /*
-   * report_task (osPriorityBelowNormal, 栈 192 words = 768 字节)
-   *   - 中低优先级，可以被采集/处理打断
-   *   - 职责: 等待 result → UART 日志 → NRF24 发送 → 释放 done 信号量
-   *   - 栈需求: UART 格式化缓冲区 + NRF24 载荷编码
+   * 【任务 3】ReportTask - 上报任务
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 优先级：16（osPriorityBelowNormal）- 中低                   │
+   * │ 栈大小：768 字节                                             │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 职责：通过 UART 和 NRF24 上报处理结果                        │
+   * │                                                              │
+   * │ 工作流程：                                                   │
+   * │   1. osMessageQueueGet(result_queue) [阻塞等待]             │
+   * │   2. MONITOR_LOG(...) [UART 输出详细日志，~100ms]           │
+   * │   3. MonitoringNrf24_SendPayload(...) [无线发送，~5ms]      │
+   * │   4. osSemaphoreRelease(report_done_sem) [通知完成]         │
+   * │   5. 循环到步骤 1                                            │
+   * │                                                              │
+   * │ 为什么优先级中低：上报可以延后，不影响采集和处理            │
+   * └─────────────────────────────────────────────────────────────┘
    */
   g_report_task = MonitoringTasks_CreateThread(
     "report_task", MonitoringTasks_ReportTask, osPriorityBelowNormal,
@@ -1316,10 +1398,27 @@ void MonitoringTasks_Create(void)
     sizeof(g_report_task_stack) / sizeof(g_report_task_stack[0]));
 
   /*
-   * cycle_task (osPriorityNormal, 栈 256 words = 1024 字节)
-   *   - 中优先级，作为周期协调者，平衡采集和上报
-   *   - 职责: 等 RTC 闹钟 → 生成 cycle_id → 发请求 → 等 done → 进 Stop
-   *   - 栈需求: Stop 门禁检查 + 外设去初始化/重初始化
+   * 【任务 4】CycleTask - 周期协调任务
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 优先级：24（osPriorityNormal）- 中                          │
+   * │ 栈大小：1024 字节                                            │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 职责：周期协调 + Stop 模式管理（低功耗核心）                │
+   * │                                                              │
+   * │ 工作流程：                                                   │
+   * │   1. osEventFlagsWait(RTC_ALARM) [阻塞等待 RTC 中断]        │
+   * │   2. 生成 cycle_request（cycle_id + timestamp）             │
+   * │   3. osMessageQueuePut(cycle_request_queue) [触发采集]      │
+   * │   4. osSemaphoreAcquire(report_done_sem, 12s) [等待上报]    │
+   * │   5. MonitoringTasks_EnterStop() [进入 Stop 模式]           │
+   * │      ├─ 停止外设（ADC/TIM3/MPU6050）                        │
+   * │      ├─ 设置 RTC 闹钟（10s测试 / 300s生产）                │
+   * │      ├─ HAL_PWR_EnterSTOPMode() [CPU停止，功耗10-50μA]      │
+   * │      └─ 被 RTC 唤醒后恢复外设                               │
+   * │   6. 循环到步骤 1                                            │
+   * │                                                              │
+   * │ 为什么优先级中：协调角色，不需要抢占采集/处理               │
+   * └─────────────────────────────────────────────────────────────┘
    */
   g_cycle_task = MonitoringTasks_CreateThread(
     "cycle_task", MonitoringTasks_RunCycleTask, osPriorityNormal,
@@ -1327,10 +1426,24 @@ void MonitoringTasks_Create(void)
     sizeof(g_cycle_task_stack) / sizeof(g_cycle_task_stack[0]));
 
   /*
-   * health_task (osPriorityLow, 栈 192 words = 768 字节)
-   *   - 低优先级，只做监测，不影响主流程
-   *   - 职责: 定期（10 秒）输出栈水位、SPI 统计、队列深度
-   *   - 栈需求: uxTaskGetStackHighWaterMark 调用 + 日志格式化
+   * 【任务 5】HealthTask - 健康监测任务
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 优先级：8（osPriorityLow）- 低                              │
+   * │ 栈大小：768 字节                                             │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 职责：定期输出系统健康日志（监测，不影响主流程）            │
+   * │                                                              │
+   * │ 工作流程：                                                   │
+   * │   1. osDelay(10000) [延时 10 秒]                            │
+   * │   2. uxTaskGetStackHighWaterMark() [读取各任务栈水位]       │
+   * │   3. MonitoringSpi_GetStatus() [读取 SPI 统计]              │
+   * │   4. osMessageQueueGetCount() [读取队列深度]                │
+   * │   5. MONITOR_LOG("[HEALTH] ...") [输出健康日志]             │
+   * │   6. 循环到步骤 1                                            │
+   * │                                                              │
+   * │ 输出内容：栈水位、队列深度、错误计数、Stop 次数等           │
+   * │ 为什么优先级低：只做监测，不参与数据流，可随时被打断        │
+   * └─────────────────────────────────────────────────────────────┘
    */
   g_health_task = MonitoringTasks_CreateThread(
     "health_task", MonitoringTasks_HealthTask, osPriorityLow,
@@ -1338,10 +1451,28 @@ void MonitoringTasks_Create(void)
     sizeof(g_health_task_stack) / sizeof(g_health_task_stack[0]));
 
   /*
-   * watchdog_task (osPriorityLow, 栈 160 words = 640 字节)
-   *   - 低优先级，只做监测，不影响主流程
-   *   - 职责: 定期（1 秒）检查任务心跳，超时拒绝看门狗许可
-   *   - 栈需求: 最小（只有简单的心跳对比和 HAL_GetTick 调用）
+   * 【任务 6】WatchdogTask - 看门狗任务
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 优先级：8（osPriorityLow）- 低                              │
+   * │ 栈大小：640 字节                                             │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 职责：监测任务心跳，决定是否喂硬件看门狗                    │
+   * │                                                              │
+   * │ 工作流程：                                                   │
+   * │   1. osDelay(1000) [延时 1 秒]                              │
+   * │   2. 检查各任务心跳是否更新                                  │
+   * │      ├─ acquisition_heartbeat                               │
+   * │      ├─ processing_heartbeat                                │
+   * │      └─ report_heartbeat                                    │
+   * │   3. 如果心跳正常或处于 IDLE/Stop 状态：                    │
+   * │      └─ g_watchdog_permit = 1, 喂狗                         │
+   * │   4. 如果心跳超时（10秒）或 FAULT 状态：                    │
+   * │      └─ g_watchdog_permit = 0, 拒绝喂狗 → 硬件复位         │
+   * │   5. 循环到步骤 1                                            │
+   * │                                                              │
+   * │ 为什么需要：防止任务卡死，最后一道安全防线                  │
+   * │ 为什么优先级低：监测功能，不参与数据流                      │
+   * └─────────────────────────────────────────────────────────────┘
    */
   g_watchdog_task = MonitoringTasks_CreateThread(
     "watchdog_task", MonitoringTasks_WatchdogTask, osPriorityLow,
