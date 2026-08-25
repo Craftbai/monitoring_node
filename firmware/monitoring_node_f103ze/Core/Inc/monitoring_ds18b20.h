@@ -67,6 +67,8 @@ typedef struct {
  * @brief  初始化 DS18B20（复位并检测存在脉冲）
  * @retval MONITORING_OK: 器件存在
  *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
+ * @note   这是 1-Wire 协议的必需操作，每次通信前都会调用
+ * @note   约 500μs 的开销，用于检测器件是否在线
  */
 monitoring_status_t DS18B20_Init(void);
 

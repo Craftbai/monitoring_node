@@ -162,11 +162,21 @@ static void DS18B20_TestOnce(void)
    用 BIN 格式读时间、BIN 格式设闹钟，规避 BCD 的秒进位问题。 */
 HAL_StatusTypeDef RTC_SetNextAlarm(uint32_t interval_sec)
 {
+  uint32_t current_counter;
+  uint32_t alarm_counter;
+
   if (interval_sec == 0U)
   {
     return HAL_ERROR;
   }
-  return RTC_SetAlarmCounter(RTC_GetCounter() + interval_sec);
+
+  current_counter = RTC_GetCounter();
+
+  /* 处理 32 位计数器溢出：使用模运算确保正确环绕 */
+  alarm_counter = current_counter + interval_sec;
+
+  /* 如果溢出（alarm < current），RTC 硬件会在计数器环绕后触发 */
+  return RTC_SetAlarmCounter(alarm_counter);
 }
 
 

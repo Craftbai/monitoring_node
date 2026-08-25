@@ -277,6 +277,7 @@ uint32_t MonitoringAcquisition_Capture(monitor_sample_block_t *block)
              &g_adc_dma_buffer[MONITOR_ADC_HALF_SAMPLES],
              MONITOR_ADC_HALF_SAMPLES * sizeof(uint16_t));
       adc_full_copied = 1U;
+      g_adc_full_ready = 0U;  /* 清零标志，保持一致性 */
     }
 #endif
 
@@ -350,10 +351,22 @@ uint32_t MonitoringAcquisition_Capture(monitor_sample_block_t *block)
             * 保留前 4 个，得到 800 Hz 的等效窗口，避免使用保留配置值。 */
            if ((vibration_source_count % 5U) != 4U)
            {
-             block->vibration[0][block->vibration_sample_count] = sample.x;
-             block->vibration[1][block->vibration_sample_count] = sample.y;
-             block->vibration[2][block->vibration_sample_count] = sample.z;
-             block->vibration_sample_count++;
+             /* 防御性检查：避免缓冲区溢出 */
+             if (block->vibration_sample_count < MONITOR_VIBRATION_SAMPLES)
+             {
+               block->vibration[0][block->vibration_sample_count] = sample.x;
+               block->vibration[1][block->vibration_sample_count] = sample.y;
+               block->vibration[2][block->vibration_sample_count] = sample.z;
+               block->vibration_sample_count++;
+             }
+             else
+             {
+               /* 缓冲区已满，标记溢出并停止采集 */
+               block->flags |= MONITOR_SAMPLE_FLAG_VIB_INVALID | MONITOR_SAMPLE_FLAG_OVERFLOW;
+               (void)MPU6050_StopCapture();
+               mpu_capture_started = 0U;
+               break;
+             }
            }
            vibration_source_count++;
            fifo_count = (uint16_t)(fifo_count - 6U);

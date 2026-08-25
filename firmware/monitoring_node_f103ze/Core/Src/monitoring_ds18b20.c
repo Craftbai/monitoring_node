@@ -217,6 +217,11 @@ static uint8_t DS18B20_ReadByte(void)
  * @retval MONITORING_OK: 器件存在
  *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
  */
+/**
+ * @brief  初始化 DS18B20（复位并检测存在脉冲）
+ * @retval MONITORING_OK: 器件存在
+ *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
+ */
 monitoring_status_t DS18B20_Init(void)
 {
     uint8_t presence;
@@ -461,16 +466,6 @@ monitoring_status_t DS18B20_GetResolution(ds18b20_resolution_t *resolution)
     }
 
     return MONITORING_OK;
-}
-
-/**
- * @brief  复位 DS18B20（重新初始化）
- * @retval MONITORING_OK: 复位成功
- *         MONITORING_ERROR_NOT_PRESENT: 器件不存在
- */
-monitoring_status_t DS18B20_Reset(void)
-{
-    return DS18B20_Init();
 }
 
 /**

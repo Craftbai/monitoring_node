@@ -556,42 +556,61 @@ static void MonitoringTasks_AcquisitionTask(void *argument)
 
   for (;;)
   {
+    /* ===== 步骤 1：等待周期请求 ===== */
+    /* 由 RunCycleTask 在 RTC 闹钟唤醒后发送周期请求 */
     if (osMessageQueueGet(g_cycle_request_queue, &request, NULL, osWaitForever) != osOK)
     {
       continue;
     }
 
+    /* ===== 步骤 2：从空闲队列取块 ===== */
+    /* 采样块池大小固定（MONITOR_SAMPLE_POOL_SIZE = 2），
+     * 如果处理任务卡死或队列满，这里会超时（100ms） */
     g_health.state = MONITOR_STATE_ACQUIRE;
     if (osMessageQueueGet(g_sample_free_queue, &block, NULL, 100U) != osOK)
     {
+      /* 空闲块耗尽：处理任务可能卡死或队列泄漏 */
       g_health.acquire_drops++;
       g_health.state = MONITOR_STATE_FAULT;
       continue;
     }
 
+    /* ===== 步骤 3：初始化采样块元数据 ===== */
     memset(block, 0, sizeof(*block));
-    block->cycle_id = request.cycle_id;
-    block->sequence = ++g_sample_sequence;
-    block->timestamp_ticks = request.timestamp_ticks;
+    block->cycle_id = request.cycle_id;           /* 周期 ID（全局递增） */
+    block->sequence = ++g_sample_sequence;        /* 采样序列号（全局递增） */
+    block->timestamp_ticks = request.timestamp_ticks; /* 周期开始时间戳 */
     block->channel_mask = MONITOR_VALID_TEMPERATURE |
                           MONITOR_VALID_VIBRATION |
-                          MONITOR_VALID_CURRENT;
+                          MONITOR_VALID_CURRENT;  /* 标记所有通道待采集 */
 
+    /* ===== 步骤 4：执行实际采集（阻塞最长 2.5 秒） ===== */
+    /* MonitoringAcquisition_Capture 轮询三个通道：
+     *   - 温度：DS18B20（约 750ms 转换 + 轮询）
+     *   - 振动：MPU6050（1.28 秒采集 1280 个样本）
+     *   - 电流：ADC DMA（1.024 秒采集 1024 个样本）
+     * 返回后 block->flags 指示各通道的有效性、超时、溢出等状态 */
     MonitoringAcquisition_Capture(block);
+
+    /* 检查传感器错误（所有通道都无效） */
     if ((block->flags & MONITOR_SAMPLE_FLAG_NO_SENSOR) != 0U)
     {
       g_health.sensor_errors++;
     }
     g_health.acquisition_heartbeat++;
 
+    /* ===== 步骤 5：将填充后的块放入 ready 队列 ===== */
+    /* 交付给 ProcessingTask 进行算法处理（去直流、RMS、FFT 等） */
     if (osMessageQueuePut(g_sample_ready_queue, &block, 0U, 100U) != osOK)
     {
+      /* ready 队列满：处理任务可能卡死 */
       g_health.acquire_drops++;
-      MonitoringTasks_ReturnSampleBlock(&block);
+      MonitoringTasks_ReturnSampleBlock(&block);  /* 归还块到 free 队列 */
       g_health.state = MONITOR_STATE_FAULT;
       continue;
     }
 
+    /* ===== 完成：等待下一个周期请求 ===== */
     g_health.samples_ready++;
     g_health.state = MONITOR_STATE_IDLE;
   }
@@ -615,24 +634,50 @@ static void MonitoringTasks_ProcessingTask(void *argument)
 
   for (;;)
   {
+    /* ===== 步骤 1：等待采样块 ===== */
+    /* 由 AcquisitionTask 填充后放入 ready 队列 */
     if (osMessageQueueGet(g_sample_ready_queue, &block, NULL, osWaitForever) != osOK)
     {
       continue;
     }
 
+    /* ===== 步骤 2：初始化结果结构 ===== */
     g_health.state = MONITOR_STATE_PROCESS;
-    start_ticks = HAL_GetTick();
+    start_ticks = HAL_GetTick();  /* 记录处理开始时间 */
     memset(&result, 0, sizeof(result));
-    result.cycle_id = block->cycle_id;
-    result.config_version = MONITOR_CONFIG_VERSION;
-    result.state = MONITOR_STATE_EVALUATE;
+    result.cycle_id = block->cycle_id;            /* 继承周期 ID */
+    result.config_version = MONITOR_CONFIG_VERSION; /* 记录配置版本 */
+    result.state = MONITOR_STATE_EVALUATE;        /* 状态标记为评估中 */
+
+    /* ===== 步骤 3：执行算法处理 ===== */
+    /* MonitoringAlgorithm_Process 执行：
+     *   1. 温度：保存原始值
+     *   2. 振动（三轴）：
+     *      - 去直流（减去均值）
+     *      - 转换为 Q15 定点数
+     *      - 加窗（汉宁窗）
+     *      - 1024 点 FFT（CMSIS-DSP）
+     *      - 计算 RMS、峰峰值
+     *      - 提取频带能量（0-10Hz, 10-40Hz, 40-150Hz, 150-400Hz）
+     *   3. 电流：
+     *      - 去直流（减去零点偏置）
+     *      - 转换为 Q15
+     *      - 计算 RMS
+     *   4. 告警评估：
+     *      - 比较各通道值与阈值
+     *      - 更新连续超限/恢复计数
+     *      - 确定告警状态（PENDING/ACTIVE/RECOVERING/NORMAL）
+     *
+     * 算法时间复杂度：O(N log N)，主要开销在 FFT（约 50-100ms） */
     MonitoringAlgorithm_Process(block, &result);
     result.processing_time_ms = HAL_GetTick() - start_ticks;
     g_health.processing_heartbeat++;
 
+    /* ===== 步骤 4：将结果放入 result 队列 ===== */
+    /* 交付给 ReportTask 进行无线上报 */
     if (osMessageQueuePut(g_result_queue, &result, 0U, 100U) != osOK)
     {
-      /* 处理已经完成，但结果队列满，归类为上报侧丢弃。 */
+      /* 结果队列满：上报任务可能卡死（处理已完成，归类为上报侧丢弃） */
       g_health.report_drops++;
     }
     else
@@ -668,15 +713,34 @@ static void MonitoringTasks_ReportTask(void *argument)
 
   for (;;)
   {
+    /* ===== 步骤 1：等待处理结果 ===== */
+    /* 由 ProcessingTask 完成算法处理后放入 result 队列 */
     if (osMessageQueueGet(g_result_queue, &result, NULL, osWaitForever) != osOK)
     {
       continue;
     }
 
+    /* ===== 步骤 2：准备上报数据 ===== */
     g_health.state = MONITOR_STATE_REPORT;
+    /* 计算温度的绝对值（用于格式化输出，避免负数显示问题） */
     absolute_temperature = result.temperature_centi < 0
                              ? -(int32_t)result.temperature_centi
                              : result.temperature_centi;
+
+    /* ===== 步骤 3：通过 UART 输出详细日志 ===== */
+    /* 日志包含：
+     *   - cycle_id：周期 ID
+     *   - state：状态机状态
+     *   - valid_mask：有效通道掩码（哪些通道成功采集）
+     *   - error_flags：错误标志（采集/处理错误）
+     *   - sample_flags：采样标志（超时、溢出等）
+     *   - temp：温度（℃，精度 0.01）
+     *   - current：电流（mA）
+     *   - vib：振动三轴 RMS（mg）
+     *   - alert_mask：告警掩码（哪些通道触发告警）
+     *   - alert_state：告警状态（NORMAL/PENDING/ACTIVE/RECOVERING）
+     *   - count：各通道的连续超限/恢复计数
+     *   - process_ms：处理时间（ms） */
     MONITOR_LOG("[RTOS] cycle=%lu state=%s valid=0x%08lx errors=0x%08lx sample=0x%08lx temp=%s%ld.%02ld current=%ldmA vib=%ld/%ld/%ld alert=0x%08lx alert_state=0x%08lx count=%u/%u/%u/%u/%u process_ms=%lu\r\n",
              (unsigned long)result.cycle_id,
              MonitoringTasks_StateText(result.state),
@@ -698,15 +762,22 @@ static void MonitoringTasks_ReportTask(void *argument)
               (unsigned int)result.alert_counts[3],
                (unsigned int)result.alert_counts[4],
                (unsigned long)result.processing_time_ms);
+
+    /* ===== 步骤 4：通过 NRF24L01 无线上报（可选） ===== */
 #if MONITOR_NRF24_REPORT_ENABLED
      if (MonitoringNrf24_IsReady() != 0U)
      {
+       /* 将结果编码为紧凑的二进制载荷（约 30-40 字节） */
        nrf24_payload_length = MonitoringTasks_BuildNrf24Payload(
          &result, nrf24_payload);
+
+       /* 发送到接收节点（最多 3 次重传） */
        nrf24_status = MonitoringNrf24_SendPayload(
          nrf24_payload, nrf24_payload_length);
+
        if (nrf24_status != MONITOR_NRF24_OK)
        {
+         /* 发送失败：可能是无应答、CRC 错误、或超时 */
          g_health.nrf24_errors++;
        }
        else
@@ -715,6 +786,9 @@ static void MonitoringTasks_ReportTask(void *argument)
        }
      }
 #endif
+
+    /* ===== 步骤 5：通知周期任务上报完成 ===== */
+    /* 释放信号量，允许 RunCycleTask 进入 Stop 模式 */
      g_health.reports_sent++;
     g_health.report_heartbeat++;
     if (g_report_done_sem != NULL)
@@ -739,7 +813,13 @@ static void MonitoringTasks_HealthTask(void *argument)
 
   for (;;)
   {
+    /* ===== 步骤 1：收集 SPI 总线统计 ===== */
+    /* SPI 用于 NRF24L01 通信，统计包含：传输次数、错误次数、恢复次数 */
     MonitoringSpi_GetStatus(&spi_status);
+
+    /* ===== 步骤 2：读取所有任务的栈水位 ===== */
+    /* uxTaskGetStackHighWaterMark 返回栈的最小剩余空间（单位：字，4 字节）
+     * 值越小表示栈使用越接近上限，值为 0 表示栈溢出风险 */
     g_health.acquisition_stack_free_words =
       (uint16_t)uxTaskGetStackHighWaterMark((TaskHandle_t)g_acquisition_task);
     g_health.processing_stack_free_words =
@@ -752,6 +832,21 @@ static void MonitoringTasks_HealthTask(void *argument)
       (uint16_t)uxTaskGetStackHighWaterMark((TaskHandle_t)g_cycle_task);
     g_health.watchdog_stack_free_words =
       (uint16_t)uxTaskGetStackHighWaterMark((TaskHandle_t)g_watchdog_task);
+
+    /* ===== 步骤 3：输出健康日志 ===== */
+    /* 日志包含：
+     *   - state：当前状态机状态
+     *   - cycles/ready/processed/reports：各阶段计数器
+     *   - drops：各阶段丢块计数
+     *   - rtc：RTC 超时和错误
+     *   - dma：DMA 事件计数
+     *   - sensor：传感器错误
+     *   - spi：SPI 统计
+     *   - nrf：NRF24 上报和错误
+     *   - wd：看门狗故障和喂狗许可
+     *   - stack：各任务栈剩余空间（字）
+     *   - stop：Stop 进入和唤醒次数
+     *   - q：各队列当前深度 */
     MONITOR_LOG("[HEALTH] state=%s cycles=%lu ready=%lu processed=%lu reports=%lu drops=%lu/%lu/%lu rtc=%lu/%lu dma=%lu/%lu sensor=%lu spi=%lu/%lu/%lu/%lu nrf=%lu/%lu wd=%lu permit=%u stack=%u/%u/%u/%u/%u/%u stop=%lu/%lu q=%lu/%lu/%lu\r\n",
              MonitoringTasks_StateText(g_health.state),
              (unsigned long)g_health.cycles_started,
@@ -785,6 +880,8 @@ static void MonitoringTasks_HealthTask(void *argument)
              (unsigned long)osMessageQueueGetCount(g_cycle_request_queue),
              (unsigned long)osMessageQueueGetCount(g_sample_ready_queue),
              (unsigned long)osMessageQueueGetCount(g_result_queue));
+
+    /* ===== 步骤 4：休眠 10 秒 ===== */
     osDelay(MONITOR_HEALTH_PERIOD_MS);
   }
 }
@@ -803,53 +900,67 @@ static void MonitoringTasks_WatchdogTask(void *argument)
 
   for (;;)
   {
+    /* ===== 每秒检查一次 ===== */
     osDelay(1000U);
+
+    /* ===== 启动前跳过检查 ===== */
+    /* 系统启动阶段（cycles_started == 0），还未进入正常周期，跳过看门狗检查 */
     if (g_health.cycles_started == 0U)
     {
       continue;
     }
 
-    /*
-     * 正常周期之间任务处于等待状态。尤其是 300 秒生产模式，不能把
-     * "没有新采样"误判成任务停止；真正执行中的 ACQUIRE/PROCESS/REPORT
-     * 状态才需要按心跳超时检查。
-     */
+    /* ===== 场景 1：空闲/Stop/自检状态 - 允许喂狗 ===== */
+    /* 在长周期模式（如 300 秒）中，任务大部分时间处于 IDLE 或 STOP 状态，
+     * 这是正常的，不应该判定为超时。只有在 ACQUIRE/PROCESS/REPORT 执行状态
+     * 下才需要检查心跳是否更新。 */
     if (g_health.state == MONITOR_STATE_IDLE ||
         g_health.state == MONITOR_STATE_STOP ||
         g_health.state == MONITOR_STATE_SELF_TEST)
     {
       g_watchdog_permit = 1U;
       g_watchdog_last_progress_tick = HAL_GetTick();
-      MonitoringHardwareWatchdog_Refresh();
+      MonitoringHardwareWatchdog_Refresh();  /* 喂狗 */
       continue;
     }
 
+    /* ===== 场景 2：心跳有更新 - 允许喂狗 ===== */
+    /* 检查采集/处理/上报任务的心跳计数器是否有更新，
+     * 任一任务有进展即视为系统正常运行 */
     if (g_health.acquisition_heartbeat != g_watchdog_last_acquisition ||
         g_health.processing_heartbeat != g_watchdog_last_processing ||
         g_health.report_heartbeat != g_watchdog_last_report)
     {
+      /* 记录当前心跳快照 */
       g_watchdog_last_acquisition = g_health.acquisition_heartbeat;
       g_watchdog_last_processing = g_health.processing_heartbeat;
       g_watchdog_last_report = g_health.report_heartbeat;
       g_watchdog_last_progress_tick = HAL_GetTick();
       g_watchdog_permit = 1U;
-      MonitoringHardwareWatchdog_Refresh();
+      MonitoringHardwareWatchdog_Refresh();  /* 喂狗 */
       continue;
     }
 
+    /* ===== 场景 3：FAULT 状态或心跳超时 - 拒绝喂狗 ===== */
+    /* 如果系统处于 FAULT 状态，或者心跳在 MONITOR_WATCHDOG_TIMEOUT_MS（10秒）
+     * 内没有更新，则拒绝喂狗，最终触发硬件看门狗复位 */
     if (g_health.state == MONITOR_STATE_FAULT ||
         (HAL_GetTick() - g_watchdog_last_progress_tick) > MONITOR_WATCHDOG_TIMEOUT_MS)
     {
-      g_watchdog_permit = 0U;
+      g_watchdog_permit = 0U;  /* 拒绝喂狗许可 */
+
+      /* Stop 状态下不记录故障（这是正常的低功耗状态） */
       if (g_health.state != MONITOR_STATE_STOP)
       {
         g_health.watchdog_faults++;
         g_health.state = MONITOR_STATE_FAULT;
         MONITOR_LOG("[WATCHDOG] heartbeat stopped; software watchdog denied\r\n");
       }
-      continue;
+      continue;  /* 不喂狗，等待硬件看门狗复位 */
     }
 
+    /* ===== 场景 4：正常状态但心跳未更新 - 允许喂狗（容忍期内） ===== */
+    /* 如果未超过超时时间，仍然允许喂狗 */
     g_watchdog_permit = 1U;
     MonitoringHardwareWatchdog_Refresh();
   }
@@ -898,27 +1009,42 @@ void MonitoringTasks_RunCycleTask(void *argument)
       continue;
     }
 
+    /* ===== 步骤 2：生成周期请求 ===== */
     /* LED 心跳由 defaultTask 独占，周期任务只负责调度数据链路。 */
-    request.cycle_id = ++g_health.cycles_started;
-    request.timestamp_ticks = HAL_GetTick();
+    request.cycle_id = ++g_health.cycles_started;  /* 全局递增周期 ID */
+    request.timestamp_ticks = HAL_GetTick();       /* 记录周期开始时间戳 */
     g_health.state = MONITOR_STATE_ACQUIRE;
 
+    /* ===== 步骤 3：发送周期请求到采集任务 ===== */
     if (osMessageQueuePut(g_cycle_request_queue, &request, 0U, 0U) != osOK)
     {
+      /* 请求队列满：采集任务可能卡死（不应该发生，队列深度=2） */
       g_health.acquire_drops++;
       g_health.state = MONITOR_STATE_FAULT;
       MONITOR_LOG("[RTOS] cycle=%lu request queue full\r\n",
                   (unsigned long)request.cycle_id);
-      MonitoringTasks_RearmRtcAlarm("request_drop");
+      MonitoringTasks_RearmRtcAlarm("request_drop");  /* 重设闹钟，继续下一周期 */
     }
     else
     {
+      /* ===== 步骤 4：等待整个数据链路完成（采集→处理→上报） ===== */
+      /* 数据流：
+       *   1. AcquisitionTask 从 cycle_request_queue 取请求
+       *   2. AcquisitionTask 采集完成后放入 sample_ready_queue
+       *   3. ProcessingTask 从 sample_ready_queue 取块并处理
+       *   4. ProcessingTask 处理完成后放入 result_queue
+       *   5. ReportTask 从 result_queue 取结果并上报
+       *   6. ReportTask 上报完成后释放 g_report_done_sem
+       *
+       * 等待超时：MONITOR_REPORT_WAIT_TIMEOUT_MS（12 秒）
+       * 正常情况下，整个流程约 3-5 秒（采集 2.5 秒 + 处理 0.1 秒 + 上报 0.5 秒） */
       g_health.state = MONITOR_STATE_IDLE;
       if (g_report_done_sem != NULL)
       {
         if (osSemaphoreAcquire(g_report_done_sem,
                                MONITOR_REPORT_WAIT_TIMEOUT_MS) != osOK)
         {
+          /* 上报超时：可能是 NRF24 发送卡死或任务链路中断 */
           g_health.report_drops++;
           g_health.state = MONITOR_STATE_FAULT;
           MONITOR_LOG("[RTOS] report completion timeout; stop denied\r\n");
@@ -926,15 +1052,29 @@ void MonitoringTasks_RunCycleTask(void *argument)
         }
         else
         {
+          /* ===== 步骤 5：尝试进入 Stop 模式（低功耗） ===== */
+          /* MonitoringTasks_EnterStop 会：
+           *   1. 检查门禁条件（看门狗许可、状态机状态、队列深度）
+           *   2. 停止外设（ADC、TIM3、MPU6050）
+           *   3. 设置 RTC 闹钟（下一周期唤醒）
+           *   4. 等待 RTC 同步
+           *   5. 进入 Stop 模式（暂停 CPU，保留 SRAM）
+           *   6. 被 RTC 闹钟唤醒后恢复外设和传感器
+           *
+           * Stop 模式功耗：约 10-50 μA（相比运行模式的 20-40 mA）
+           * 在长周期模式（如 300 秒）下，可大幅延长电池寿命 */
           if (MonitoringTasks_EnterStop() == 0U)
           {
+            /* Stop 门禁拒绝：可能是看门狗故障、队列泄漏、或 FAULT 状态 */
             MONITOR_LOG("[RTOS] stop gate denied; system remains running\r\n");
             MonitoringTasks_RearmRtcAlarm("stop_gate_denied");
           }
+          /* 如果成功进入 Stop，唤醒后会从这里继续执行，进入下一个循环 */
         }
       }
       else
       {
+        /* 信号量未初始化：不应该发生（Create 阶段的错误） */
         g_health.report_drops++;
         g_health.state = MONITOR_STATE_FAULT;
         MONITOR_LOG("[RTOS] report semaphore unavailable; stop denied\r\n");
