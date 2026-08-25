@@ -1,6 +1,6 @@
 /**
  ******************************************************************************
- * @file    ds18b20.h
+ * @file    monitoring_ds18b20.h
  * @brief   DS18B20 数字温度传感器驱动头文件
  * @author  监测节点项目组
  * @date    2026-08-19
@@ -20,8 +20,8 @@
  ******************************************************************************
  */
 
-#ifndef __DS18B20_H
-#define __DS18B20_H
+#ifndef MONITORING_DS18B20_H
+#define MONITORING_DS18B20_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -151,4 +151,4 @@ uint8_t DS18B20_CRC8(const uint8_t *data, uint8_t len);
 }
 #endif
 
-#endif /* __DS18B20_H */
+#endif /* MONITORING_DS18B20_H */

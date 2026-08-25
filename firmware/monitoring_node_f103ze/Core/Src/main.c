@@ -31,7 +31,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "monitoring_tasks.h"
-#include "ds18b20.h"
+#include "monitoring_ds18b20.h"
 #include <stdio.h>
 #include <stdarg.h>
 /* USER CODE END Includes */

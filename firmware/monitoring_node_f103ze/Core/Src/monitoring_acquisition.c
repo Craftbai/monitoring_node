@@ -37,7 +37,7 @@
 #include "monitoring_acquisition.h"
 
 #include "adc.h"
-#include "ds18b20.h"
+#include "monitoring_ds18b20.h"
 #include "i2c.h"
 #include "mpu6050.h"
 #include "monitoring_nrf24.h"
