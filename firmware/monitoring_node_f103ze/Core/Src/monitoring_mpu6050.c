@@ -1,4 +1,4 @@
-#include "mpu6050.h"
+#include "monitoring_mpu6050.h"
 #include "monitoring_bus.h"
 #include "i2c.h"
 #include "gpio.h"

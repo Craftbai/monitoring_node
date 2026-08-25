@@ -4,7 +4,7 @@
 
 #include "monitoring_drivers.h"
 #include "monitoring_ds18b20.h"
-#include "mpu6050.h"
+#include "monitoring_mpu6050.h"
 #include "adc.h"
 #include "monitoring_nrf24.h"
 #include "monitoring_hw_watchdog.h"
