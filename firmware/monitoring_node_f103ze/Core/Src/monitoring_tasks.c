@@ -1099,12 +1099,22 @@ void MonitoringTasks_Create(void)
     .cb_size = sizeof(g_log_mutex_cb)
   };
 
-  /* ===== 第 1 步：初始化通信接口（SPI + I2C） ===== */
-  /* 必须在任务创建前完成，避免任务运行时驱动未就绪。 */
+  /* ═══════════════════════════════════════════════════════════════════
+   * 第 1 步：初始化通信接口（SPI + I2C）
+   * ═══════════════════════════════════════════════════════════════════
+   * 必须在任务创建前完成，避免任务运行时驱动未就绪。
+   * MonitoringBus_Init() 会初始化 SPI2 和 I2C1 的统计与错误恢复逻辑。
+   */
   MonitoringBus_Init();
 
-  /* ===== 第 2 步：初始化传感器和模块 ===== */
-  /* 初始化顺序：温度(DS18B20) → 振动(MPU6050) → 电流(ADC) → 无线(NRF24) → 看门狗(IWDG) */
+  /* ═══════════════════════════════════════════════════════════════════
+   * 第 2 步：初始化传感器和模块
+   * ═══════════════════════════════════════════════════════════════════
+   * 初始化顺序（按依赖关系）：
+   *   温度(DS18B20/1-Wire) → 振动(MPU6050/I2C) → 电流(ACS712/ADC)
+   *   → 无线(NRF24L01/SPI) → 看门狗(IWDG)
+   * 传感器初始化失败不会阻止系统启动（对应通道降级运行）。
+   */
   MonitoringDrivers_Init();
 
   /* ═══════════════════════════════════════════════════════════════════
@@ -1298,8 +1308,10 @@ void MonitoringTasks_Create(void)
     return;
   }
 
-  /* ===== 第 4 步：初始化块池 ===== */
-  /* 将所有空块预先放入 sample_free_queue，供 acquisition_task 取用。
+  /* ═══════════════════════════════════════════════════════════════════
+   * 第 5 步：初始化采样块池（预填充空闲队列）
+   * ═══════════════════════════════════════════════════════════════════
+   * 将所有空块指针预先放入 sample_free_queue，供 acquisition_task 取用。
    * 块池与空闲队列必须一一对应（SAMPLE_POOL_SIZE == QUEUE_DEPTH），
    * 否则可能出现块永久丢失。
    */
@@ -1479,7 +1491,12 @@ void MonitoringTasks_Create(void)
     &g_watchdog_task_cb, g_watchdog_task_stack,
     sizeof(g_watchdog_task_stack) / sizeof(g_watchdog_task_stack[0]));
 
-  /* 失败检查：任何一个任务创建失败都进入 FAULT 状态 */
+  /* ═══════════════════════════════════════════════════════════════════
+   * 失败检查：6 个任务全部创建成功才继续
+   * ═══════════════════════════════════════════════════════════════════
+   * 静态分配理论不会失败（栈和控制块在编译时已分配），
+   * 但保留检查以防配置错误（如栈大小写错、控制块冲突）。
+   */
   if (g_acquisition_task == NULL || g_processing_task == NULL ||
       g_report_task == NULL || g_health_task == NULL || g_cycle_task == NULL ||
       g_watchdog_task == NULL)
@@ -1489,18 +1506,36 @@ void MonitoringTasks_Create(void)
     return;
   }
 
-  /* ===== 第 6 步：初始化应用层 ===== */
-  /* 任务已创建但尚未运行（调度器在 main.c 的 osKernelStart 后才启动），
-   * 此时可以安全地初始化应用层状态。
-   *
-   * MonitoringAlerts_Reset(): 告警状态机复位（所有通道进入 NORMAL 状态）
+  /* ═══════════════════════════════════════════════════════════════════
+   * 第 7 步：初始化应用层状态（任务尚未运行）
+   * ═══════════════════════════════════════════════════════════════════
+   * 任务已创建但尚未运行（调度器在 main.c 的 osKernelStart 后才启动），
+   * 此时可以安全地初始化应用层状态，无并发问题。
+   */
+
+  /*
+   * MonitoringAlerts_Reset():
+   *   - 告警状态机复位（所有通道进入 NORMAL 状态）
+   *   - 清除连续超限/恢复计数器
+   *   - 保证系统启动时无历史告警残留
    */
   MonitoringAlerts_Reset();
 
-  /* 看门狗初始许可：允许任务启动后立即开始喂狗 */
+  /*
+   * 看门狗初始许可：
+   *   - g_watchdog_permit = 1：允许 watchdog_task 开始喂狗
+   *   - g_watchdog_last_progress_tick：记录初始时间戳
+   *   - 任务启动后，watchdog_task 会周期性检查心跳并喂狗
+   */
   g_watchdog_last_progress_tick = HAL_GetTick();
   g_watchdog_permit = 1U;
 
+  /*
+   * 启动完成日志：
+   *   - 打印到 UART，确认所有任务创建成功
+   *   - 之后 main.c 调用 osKernelStart() 启动调度器
+   *   - 从此刻起，任务开始按优先级调度运行
+   */
   UART_Log("[RTOS] pipeline ready: acquisition/processing/report/health/watchdog\r\n");
 }
 
