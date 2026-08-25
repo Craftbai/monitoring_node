@@ -1107,19 +1107,37 @@ void MonitoringTasks_Create(void)
   /* 初始化顺序：温度(DS18B20) → 振动(MPU6050) → 电流(ADC) → 无线(NRF24) → 看门狗(IWDG) */
   MonitoringDrivers_Init();
 
-  /* ===== 第 3 步：创建同步资源（互斥量、事件组、信号量） ===== */
-  /* 这些资源必须在任务创建前就绪，否则任务运行时访问 NULL 句柄会崩溃。
-   *
-   * g_log_mutex: 日志互斥量
-   *   - 保护 UART_Log 的多任务并发调用
-   *   - MONITOR_LOG 宏会先获取锁，再调用 UART_Log，最后释放锁
+  /* ═══════════════════════════════════════════════════════════════════
+   * 第 3 步：创建同步资源（互斥量、事件组、信号量）
+   * ═══════════════════════════════════════════════════════════════════
+   * 这些资源必须在任务创建前就绪，否则任务运行时访问 NULL 句柄会崩溃。
+   */
+
+  /*
+   * 【互斥量】g_log_mutex
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 用途：保护 UART 日志输出，防止多任务并发调用导致乱码       │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 使用场景：所有任务调用 MONITOR_LOG 宏时                     │
+   * │ 工作流程：                                                   │
+   * │   任务 A: osMutexAcquire(g_log_mutex) → UART_Log →          │
+   * │           osMutexRelease(g_log_mutex)                       │
+   * │   任务 B: 等待任务 A 释放锁后才能输出                        │
+   * └─────────────────────────────────────────────────────────────┘
    */
   g_log_mutex = osMutexNew(&log_mutex_attributes);
 
   /*
-   * g_monitor_cycle_event: 周期事件组
-   *   - RTC 闹钟中断发布 MONITOR_EVENT_RTC_ALARM 标志
-   *   - cycle_task 等待此事件后生成新周期请求
+   * 【事件组】g_monitor_cycle_event
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 用途：RTC 闹钟中断通知 CycleTask 开始新周期                 │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 数据流向：RTC 中断 → 设置事件标志 → CycleTask 唤醒         │
+   * │ 事件标志：MONITOR_EVENT_RTC_ALARM                           │
+   * │ 使用位置：                                                   │
+   * │   - HAL_RTC_AlarmAEventCallback: 设置标志                   │
+   * │   - CycleTask: osEventFlagsWait 等待标志                    │
+   * └─────────────────────────────────────────────────────────────┘
    */
   const osEventFlagsAttr_t cycle_event_attributes = {
     .name = "cycleEvent",
@@ -1129,9 +1147,17 @@ void MonitoringTasks_Create(void)
   g_monitor_cycle_event = osEventFlagsNew(&cycle_event_attributes);
 
   /*
-   * g_monitor_control_event: 采集控制事件组
-   *   - MPU6050 数据就绪中断（PE2/EXTI2）发布 MONITOR_EVENT_CAPTURE 标志
-   *   - acquisition_task 等待此事件后读取 FIFO（避免在中断中访问 I2C）
+   * 【事件组】g_monitor_control_event
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 用途：MPU6050 数据就绪中断通知 AcquisitionTask 读取 FIFO   │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 数据流向：MPU6050 中断 → 设置事件标志 → AcquisitionTask    │
+   * │ 事件标志：MONITOR_EVENT_CAPTURE                             │
+   * │ 为什么需要：避免在中断中访问 I2C（I2C 操作耗时长）          │
+   * │ 使用位置：                                                   │
+   * │   - HAL_GPIO_EXTI_Callback(PE2): 设置标志                   │
+   * │   - AcquisitionTask: osEventFlagsWait 等待标志后读 FIFO    │
+   * └─────────────────────────────────────────────────────────────┘
    */
   const osEventFlagsAttr_t control_event_attributes = {
     .name = "controlEvent",
@@ -1141,10 +1167,18 @@ void MonitoringTasks_Create(void)
   g_monitor_control_event = osEventFlagsNew(&control_event_attributes);
 
   /*
-   * g_report_done_sem: 上报完成信号量（二值信号量，初始值 0）
-   *   - report_task 完成 UART/NRF24 上报后释放信号量
-   *   - cycle_task 等待信号量（12 秒超时），收到后尝试进入 Stop 模式
-   *   - 这个握手机制确保进 Stop 前本周期结果已上报完成
+   * 【信号量】g_report_done_sem（二值信号量，初始值 0）
+   * ┌─────────────────────────────────────────────────────────────┐
+   * │ 用途：ReportTask 通知 CycleTask 上报完成，可以进 Stop      │
+   * ├─────────────────────────────────────────────────────────────┤
+   * │ 数据流向：ReportTask 完成 → Release 信号量 → CycleTask     │
+   * │ 为什么需要：确保进 Stop 前本周期结果已上报完成              │
+   * │ 工作流程：                                                   │
+   * │   CycleTask: 发送周期请求 → Acquire(12s 超时) [等待]       │
+   * │   ReportTask: 上报完成 → Release                            │
+   * │   CycleTask: 收到信号 → 进入 Stop 模式                      │
+   * │ 超时处理：12 秒未收到信号 → 记录错误 → 重设闹钟继续         │
+   * └─────────────────────────────────────────────────────────────┘
    */
   const osSemaphoreAttr_t report_done_sem_attributes = {
     .name = "reportDoneSem",
