@@ -119,7 +119,7 @@ void StartDefaultTask(void *argument)
   /* FreeRTOS 基础心跳：LED0/PB5 低有效，每 500 ms 翻转一次。 */
   HAL_GPIO_WritePin(STATUS_LED_GPIO_Port, STATUS_LED_Pin, GPIO_PIN_SET);
 
-  for(;;)
+  while(1)
   {
     HAL_GPIO_TogglePin(STATUS_LED_GPIO_Port, STATUS_LED_Pin);
     osDelay(500U);

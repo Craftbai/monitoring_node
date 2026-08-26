@@ -59,7 +59,7 @@ extern void xPortSysTickHandler(void);
 
 /* External variables --------------------------------------------------------*/
 extern DMA_HandleTypeDef hdma_adc1;
-extern I2C_HandleTypeDef hi2c1;
+extern I2C_HandleTypeDef hi2c2;
 extern RTC_HandleTypeDef hrtc;
 extern TIM_HandleTypeDef htim4;
 
@@ -180,20 +180,6 @@ void EXTI2_IRQHandler(void)
 }
 
 /**
-  * @brief This function handles EXTI line4 interrupt.
-  */
-void EXTI4_IRQHandler(void)
-{
-  /* USER CODE BEGIN EXTI4_IRQn 0 */
-
-  /* USER CODE END EXTI4_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(NRF24_IRQ_Pin);
-  /* USER CODE BEGIN EXTI4_IRQn 1 */
-
-  /* USER CODE END EXTI4_IRQn 1 */
-}
-
-/**
   * @brief This function handles DMA1 channel1 global interrupt.
   */
 void DMA1_Channel1_IRQHandler(void)
@@ -205,6 +191,20 @@ void DMA1_Channel1_IRQHandler(void)
   /* USER CODE BEGIN DMA1_Channel1_IRQn 1 */
 
   /* USER CODE END DMA1_Channel1_IRQn 1 */
+}
+
+/**
+  * @brief This function handles EXTI line[9:5] interrupts.
+  */
+void EXTI9_5_IRQHandler(void)
+{
+  /* USER CODE BEGIN EXTI9_5_IRQn 0 */
+
+  /* USER CODE END EXTI9_5_IRQn 0 */
+  HAL_GPIO_EXTI_IRQHandler(NRF24_IRQ_Pin);
+  /* USER CODE BEGIN EXTI9_5_IRQn 1 */
+
+  /* USER CODE END EXTI9_5_IRQn 1 */
 }
 
 /**
@@ -222,31 +222,31 @@ void TIM4_IRQHandler(void)
 }
 
 /**
-  * @brief This function handles I2C1 event interrupt.
+  * @brief This function handles I2C2 event interrupt.
   */
-void I2C1_EV_IRQHandler(void)
+void I2C2_EV_IRQHandler(void)
 {
-  /* USER CODE BEGIN I2C1_EV_IRQn 0 */
+  /* USER CODE BEGIN I2C2_EV_IRQn 0 */
 
-  /* USER CODE END I2C1_EV_IRQn 0 */
-  HAL_I2C_EV_IRQHandler(&hi2c1);
-  /* USER CODE BEGIN I2C1_EV_IRQn 1 */
+  /* USER CODE END I2C2_EV_IRQn 0 */
+  HAL_I2C_EV_IRQHandler(&hi2c2);
+  /* USER CODE BEGIN I2C2_EV_IRQn 1 */
 
-  /* USER CODE END I2C1_EV_IRQn 1 */
+  /* USER CODE END I2C2_EV_IRQn 1 */
 }
 
 /**
-  * @brief This function handles I2C1 error interrupt.
+  * @brief This function handles I2C2 error interrupt.
   */
-void I2C1_ER_IRQHandler(void)
+void I2C2_ER_IRQHandler(void)
 {
-  /* USER CODE BEGIN I2C1_ER_IRQn 0 */
+  /* USER CODE BEGIN I2C2_ER_IRQn 0 */
 
-  /* USER CODE END I2C1_ER_IRQn 0 */
-  HAL_I2C_ER_IRQHandler(&hi2c1);
-  /* USER CODE BEGIN I2C1_ER_IRQn 1 */
+  /* USER CODE END I2C2_ER_IRQn 0 */
+  HAL_I2C_ER_IRQHandler(&hi2c2);
+  /* USER CODE BEGIN I2C2_ER_IRQn 1 */
 
-  /* USER CODE END I2C1_ER_IRQn 1 */
+  /* USER CODE END I2C2_ER_IRQn 1 */
 }
 
 /**

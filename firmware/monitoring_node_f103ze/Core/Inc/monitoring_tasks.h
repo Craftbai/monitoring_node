@@ -33,10 +33,10 @@ extern "C" {
 /* 队列深度：必须 >= POOL_SIZE，保证块池与空闲队列一一对应 */
 #define MONITOR_QUEUE_DEPTH          2U
 
-/* 测试模式：1=5秒快速周期便于串口观察，0=300秒生产周期 */
+/* 测试模式：1=5秒快速周期便于串口观察，0=60秒生产周期 */
 #define MONITOR_TEST_MODE            0U
 #define MONITOR_TEST_INTERVAL_SEC    5U
-#define MONITOR_PRODUCTION_PERIOD_SEC 300U
+#define MONITOR_PRODUCTION_PERIOD_SEC 60U
 
 #if MONITOR_TEST_MODE
 #define MONITOR_CYCLE_INTERVAL_SEC   MONITOR_TEST_INTERVAL_SEC
@@ -53,8 +53,8 @@ extern "C" {
 /* FreeRTOS 事件标志位：用于任务间同步与中断通知 */
 #define MONITOR_EVENT_RTC_ALARM      (1UL << 0)  /* RTC 闹钟触发新周期 */
 #define MONITOR_EVENT_CAPTURE        (1UL << 1)  /* MPU6050 数据就绪中断 */
-#define MONITOR_EVENT_REPORT_DONE    (1UL << 2)  /* 上报完成（保留） */
-#define MONITOR_EVENT_STOP_WAKE      (1UL << 3)  /* Stop 唤醒（保留） */
+#define MONITOR_EVENT_REPORT_DONE    (1UL << 2)  /* 上报完成（未使用，使用的是二值信号量） */
+#define MONITOR_EVENT_STOP_WAKE      (1UL << 3)  /* Stop 唤醒（未使用，唤醒后直接返回） */
 
 /* 采集块池和空闲队列必须一一对应，否则可能出现块永久丢失。 */
 #if MONITOR_SAMPLE_POOL_SIZE > MONITOR_QUEUE_DEPTH

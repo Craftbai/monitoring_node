@@ -108,7 +108,7 @@ HAL_StatusTypeDef MonitoringI2c_MemRead(uint16_t dev_addr, uint16_t mem_addr,
     return HAL_ERROR;
   }
 
-  result = HAL_I2C_Mem_Read(&hi2c1, dev_addr, mem_addr,
+  result = HAL_I2C_Mem_Read(&hi2c2, dev_addr, mem_addr,
                             I2C_MEMADD_SIZE_8BIT, data, length, timeout_ms);
 
   if (result == HAL_OK) {
@@ -130,7 +130,7 @@ HAL_StatusTypeDef MonitoringI2c_MemWrite(uint16_t dev_addr, uint16_t mem_addr,
     return HAL_ERROR;
   }
 
-  result = HAL_I2C_Mem_Write(&hi2c1, dev_addr, mem_addr,
+  result = HAL_I2C_Mem_Write(&hi2c2, dev_addr, mem_addr,
                              I2C_MEMADD_SIZE_8BIT, (uint8_t *)data,
                              length, timeout_ms);
 
@@ -146,10 +146,10 @@ HAL_StatusTypeDef MonitoringI2c_MemWrite(uint16_t dev_addr, uint16_t mem_addr,
 HAL_StatusTypeDef MonitoringI2c_Recover(void) {
   HAL_StatusTypeDef status;
 
-  status = HAL_I2C_DeInit(&hi2c1);
+  status = HAL_I2C_DeInit(&hi2c2);
   if (status == HAL_OK) {
-    MX_I2C1_Init();
-    status = (hi2c1.State == HAL_I2C_STATE_READY) ? HAL_OK : HAL_ERROR;
+    MX_I2C2_Init();
+    status = (hi2c2.State == HAL_I2C_STATE_READY) ? HAL_OK : HAL_ERROR;
   }
 
   if (status == HAL_OK) {

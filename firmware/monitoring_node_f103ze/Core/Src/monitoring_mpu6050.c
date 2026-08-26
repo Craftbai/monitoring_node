@@ -28,24 +28,24 @@ static void MPU6050_RecoverBus(void)
   GPIO_InitTypeDef gpio = {0};
 
   /* 先释放 I2C 外设，再用 GPIO 给被从机拉住的 SCL 发送恢复脉冲。 */
-  (void)HAL_I2C_DeInit(&hi2c1);
+  (void)HAL_I2C_DeInit(&hi2c2);
   __HAL_RCC_GPIOB_CLK_ENABLE();
-  gpio.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+  gpio.Pin = GPIO_PIN_10 | GPIO_PIN_11;
   gpio.Mode = GPIO_MODE_OUTPUT_OD;
   gpio.Pull = GPIO_NOPULL;
   gpio.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOB, &gpio);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_SET);
   for (uint8_t i = 0U; i < 9U; i++)
   {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_RESET);
     HAL_Delay(1U);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_SET);
     HAL_Delay(1U);
   }
   /* SCL、SDA 同时释放，形成一个 STOP 条件。 */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8 | GPIO_PIN_9, GPIO_PIN_SET);
-  MX_I2C1_Init();
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10 | GPIO_PIN_11, GPIO_PIN_SET);
+  MX_I2C2_Init();
 }
 
 static monitoring_status_t MPU6050_Write(uint8_t reg, uint8_t value)

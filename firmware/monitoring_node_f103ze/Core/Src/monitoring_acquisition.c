@@ -528,8 +528,8 @@ uint8_t MonitoringAcquisition_Resume(void)
   uint8_t result;
 
   /* 重新初始化 I2C（MPU6050 依赖） */
-  (void)HAL_I2C_DeInit(&hi2c1);
-  MX_I2C1_Init();
+  (void)HAL_I2C_DeInit(&hi2c2);
+  MX_I2C2_Init();
 
   /* 统一恢复所有传感器和模块 */
   result = MonitoringDrivers_Resume();

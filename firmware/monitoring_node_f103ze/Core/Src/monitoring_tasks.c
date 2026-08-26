@@ -40,8 +40,8 @@ extern void UART_Log(const char *fmt, ...);
 extern void SystemClock_Config(void);
 
 /* 内部常量 */
-#define MONITOR_HEALTH_PERIOD_MS 10000U
-#define MONITOR_WATCHDOG_TIMEOUT_MS 15000U
+#define MONITOR_HEALTH_PERIOD_MS 10000U             // 健康统计周期，10 秒
+#define MONITOR_WATCHDOG_TIMEOUT_MS 15000U          // 软件看门狗超时，15 秒
 
 /* =============================================================================
  * 分区 1/7: NRF24 上报（载荷编码 + 板级 CS/CE 回调）
@@ -195,10 +195,10 @@ static monitor_sample_block_t g_sample_pool[MONITOR_SAMPLE_POOL_SIZE];
 static uint32_t g_sample_sequence = 0U;
 
 /* 队列：cycle_request → acquisition → sample_ready → processing → result → report */
-static osMessageQueueId_t g_cycle_request_queue;
-static osMessageQueueId_t g_sample_free_queue;
-static osMessageQueueId_t g_sample_ready_queue;
-static osMessageQueueId_t g_result_queue;
+static osMessageQueueId_t g_cycle_request_queue;    //  周期请求队列
+static osMessageQueueId_t g_sample_free_queue;      //  采集队列
+static osMessageQueueId_t g_sample_ready_queue;     //  处理队列
+static osMessageQueueId_t g_result_queue;           //  上报队列
 
 /* 事件组：RTC 闹钟、采集控制 */
 osEventFlagsId_t g_monitor_cycle_event;
@@ -219,11 +219,11 @@ static osMutexId_t g_log_mutex;
 static osSemaphoreId_t g_report_done_sem;
 
 /* 看门狗许可与心跳 */
-static volatile uint8_t g_watchdog_permit;
-static uint32_t g_watchdog_last_acquisition;
-static uint32_t g_watchdog_last_processing;
-static uint32_t g_watchdog_last_report;
-static uint32_t g_watchdog_last_progress_tick;
+static volatile uint8_t g_watchdog_permit;        // 看门狗喂狗许可，0 表示拒绝喂狗
+static uint32_t g_watchdog_last_acquisition;      // 上次记录的采集任务心跳计数
+static uint32_t g_watchdog_last_processing;       // 上次记录的处理任务心跳计数
+static uint32_t g_watchdog_last_report;           // 上次记录的上报任务心跳计数
+static uint32_t g_watchdog_last_progress_tick;    // 最近一次检测到任务进展的 HAL_GetTick() 值
 
 /* =============================================================================
  * 分区 3/7: 日志与健康（LogLock 宏、g_health、状态文本）
@@ -266,15 +266,15 @@ static void MonitoringTasks_LogUnlock(void)
 
 /* 健康统计全局实例 */
 static monitor_health_stats_t g_health = {
-  .cycles_started = 0U,
-  .samples_ready = 0U,
-  .samples_processed = 0U,
-  .reports_sent = 0U,
-  .acquire_drops = 0U,
-  .process_drops = 0U,
-  .report_drops = 0U,
-  .rtc_wait_timeouts = 0U,
-  .rtc_alarm_errors = 0U,
+  .cycles_started = 0U,           // RTC 闹钟触发次数
+  .samples_ready = 0U,            // 成功放入 ready_queue 的块数
+  .samples_processed = 0U,        // 成功处理的块数
+  .reports_sent = 0U,             // 成功上报的结果数
+  .acquire_drops = 0U,            // 采集侧丢块次数
+  .process_drops = 0U,            // 处理侧丢块次数
+  .report_drops = 0U,             // 上报侧丢失次数
+  .rtc_wait_timeouts = 0U,        // RTC 闹钟等待超时次数  
+  .rtc_alarm_errors = 0U,         // RTC 闹钟设置失败次数
   .state = MONITOR_STATE_BOOT
 };
 
@@ -361,7 +361,7 @@ static void MonitoringTasks_RearmRtcAlarm(const char *reason)
   if (RTC_SetNextAlarm(MONITOR_CYCLE_INTERVAL_SEC) != HAL_OK)
   {
     g_health.rtc_alarm_errors++;
-    MONITOR_LOG("[RTOS] RTC alarm rearm failed, reason=%s\r\n", reason);
+    MONITOR_LOG("[RTOS] RTC 闹钟重置失败，原因=%s\r\n", reason);
   }
 }
 
@@ -387,7 +387,7 @@ static uint8_t MonitoringTasks_EnterStop(void)
   if (MonitoringHardwareWatchdog_IsEnabled() != 0U)
   {
     g_health.state = MONITOR_STATE_IDLE;
-    MONITOR_LOG("[RTOS] stop gate denied; hardware watchdog is enabled\r\n");
+    MONITOR_LOG("[RTOS] 停止门禁拒绝；硬件看门狗已启用\r\n");
     return 0U;
   }
 
@@ -398,7 +398,7 @@ static uint8_t MonitoringTasks_EnterStop(void)
   {
     /* 队列瞬时未清空时继续运行，交给下一周期重新尝试 Stop。 */
     g_health.state = MONITOR_STATE_IDLE;
-    MONITOR_LOG("[RTOS] stop gate busy; keep running, q=%lu/%lu/%lu free=%lu\r\n",
+    MONITOR_LOG("[RTOS] 停止门禁繁忙；继续运行，q=%lu/%lu/%lu 空闲=%lu\r\n",
                 (unsigned long)osMessageQueueGetCount(g_cycle_request_queue),
                 (unsigned long)osMessageQueueGetCount(g_sample_ready_queue),
                 (unsigned long)osMessageQueueGetCount(g_result_queue),
@@ -412,7 +412,7 @@ static uint8_t MonitoringTasks_EnterStop(void)
     g_health.state = MONITOR_STATE_FAULT;
     g_watchdog_permit = 0U;
     g_health.rtc_alarm_errors++;
-    MONITOR_LOG("[RTOS] acquisition stop failed; stop denied\r\n");
+    MONITOR_LOG("[RTOS] 采集停止失败；停止被拒绝\r\n");
     return 0U;
   }
 
@@ -421,7 +421,7 @@ static uint8_t MonitoringTasks_EnterStop(void)
   {
     g_health.rtc_alarm_errors++;
     g_health.state = MONITOR_STATE_FAULT;
-    MONITOR_LOG("[RTOS] stop alarm setup failed; stop denied\r\n");
+    MONITOR_LOG("[RTOS] 停止闹钟设置失败；停止被拒绝\r\n");
     return 0U;
   }
 
@@ -506,7 +506,7 @@ static void MonitoringTasks_AcquisitionTask(void *argument)
   monitor_sample_block_t *block;
   (void)argument;
 
-  for (;;)
+  while (1)
   {
     /* ===== 步骤 1：等待周期请求 ===== */
     /* 由 RunCycleTask 在 RTC 闹钟唤醒后发送周期请求 */
@@ -517,11 +517,12 @@ static void MonitoringTasks_AcquisitionTask(void *argument)
 
     /* ===== 步骤 2：从空闲队列取块 ===== */
     /* 采样块池大小固定（MONITOR_SAMPLE_POOL_SIZE = 2），
-     * 如果处理任务卡死或队列满，这里会超时（100ms） */
+      * 如果空闲队列为空，这里最多等待 100ms；处理任务卡死时，
+      * 可能因采样块长期未归还而间接导致空闲队列为空。 */
     g_health.state = MONITOR_STATE_ACQUIRE;
     if (osMessageQueueGet(g_sample_free_queue, &block, NULL, 100U) != osOK)
     {
-      /* 空闲块耗尽：处理任务可能卡死或队列泄漏 */
+      /* 等待超时：空闲块耗尽，可能存在处理任务卡死或块归还失败 */
       g_health.acquire_drops++;
       g_health.state = MONITOR_STATE_FAULT;
       continue;
@@ -584,7 +585,7 @@ static void MonitoringTasks_ProcessingTask(void *argument)
   uint32_t start_ticks;
   (void)argument;
 
-  for (;;)
+  while (1)
   {
     /* ===== 步骤 1：等待采样块 ===== */
     /* 由 AcquisitionTask 填充后放入 ready 队列 */
@@ -663,7 +664,7 @@ static void MonitoringTasks_ReportTask(void *argument)
 #endif
   (void)argument;
 
-  for (;;)
+  while (1)
   {
     /* ===== 步骤 1：等待处理结果 ===== */
     /* 由 ProcessingTask 完成算法处理后放入 result 队列 */
@@ -693,18 +694,18 @@ static void MonitoringTasks_ReportTask(void *argument)
      *   - alert_state：告警状态（NORMAL/PENDING/ACTIVE/RECOVERING）
      *   - count：各通道的连续超限/恢复计数
      *   - process_ms：处理时间（ms） */
-    MONITOR_LOG("[RTOS] cycle=%lu state=%s valid=0x%08lx errors=0x%08lx sample=0x%08lx temp=%s%ld.%02ld current=%ldmA vib=%ld/%ld/%ld alert=0x%08lx alert_state=0x%08lx count=%u/%u/%u/%u/%u process_ms=%lu\r\n",
-             (unsigned long)result.cycle_id,
-             MonitoringTasks_StateText(result.state),
+    MONITOR_LOG("[RTOS] 周期=%lu 状态=%s 有效=0x%08lx 错误=0x%08lx 样本=0x%08lx 温度=%s%ld.%02ld 电流=%ldmA 振动=%ld/%ld/%ld 告警=0x%08lx 告警状态=0x%08lx 计数=%u/%u/%u/%u/%u 处理_ms=%lu\r\n",
+              (unsigned long)result.cycle_id,
+              MonitoringTasks_StateText(result.state),
               (unsigned long)result.valid_mask,
               (unsigned long)result.error_flags,
               (unsigned long)result.sample_flags,
-             result.temperature_centi < 0 ? "-" : "",
-             (long)(absolute_temperature / 100),
-             (long)(absolute_temperature % 100),
-             (long)result.current_milliamp,
-             (long)result.vibration_rms_mg[0],
-             (long)result.vibration_rms_mg[1],
+              result.temperature_centi < 0 ? "-" : "",
+              (long)(absolute_temperature / 100),
+              (long)(absolute_temperature % 100),
+              (long)result.current_milliamp,
+              (long)result.vibration_rms_mg[0],
+              (long)result.vibration_rms_mg[1],
               (long)result.vibration_rms_mg[2],
               (unsigned long)result.alert_mask,
               (unsigned long)result.alert_states,
@@ -712,8 +713,8 @@ static void MonitoringTasks_ReportTask(void *argument)
               (unsigned int)result.alert_counts[1],
               (unsigned int)result.alert_counts[2],
               (unsigned int)result.alert_counts[3],
-               (unsigned int)result.alert_counts[4],
-               (unsigned long)result.processing_time_ms);
+              (unsigned int)result.alert_counts[4],
+              (unsigned long)result.processing_time_ms);
 
     /* ===== 步骤 4：通过 NRF24L01 无线上报（可选） ===== */
 #if MONITOR_NRF24_REPORT_ENABLED
@@ -740,7 +741,7 @@ static void MonitoringTasks_ReportTask(void *argument)
 #endif
 
     /* ===== 步骤 5：通知周期任务上报完成 ===== */
-    /* 释放信号量，允许 RunCycleTask 进入 Stop 模式 */
+    /* 释放二值信号量，允许 RunCycleTask 进入 Stop 模式 */
      g_health.reports_sent++;
     g_health.report_heartbeat++;
     if (g_report_done_sem != NULL)
@@ -763,7 +764,7 @@ static void MonitoringTasks_HealthTask(void *argument)
   monitoring_bus_status_t spi_status;
   (void)argument;
 
-  for (;;)
+  while (1)
   {
     /* ===== 步骤 1：收集 SPI 总线统计 ===== */
     /* SPI 用于 NRF24L01 通信，统计包含：传输次数、错误次数、恢复次数 */
@@ -799,7 +800,7 @@ static void MonitoringTasks_HealthTask(void *argument)
      *   - stack：各任务栈剩余空间（字）
      *   - stop：Stop 进入和唤醒次数
      *   - q：各队列当前深度 */
-    MONITOR_LOG("[HEALTH] state=%s cycles=%lu ready=%lu processed=%lu reports=%lu drops=%lu/%lu/%lu rtc=%lu/%lu dma=%lu/%lu sensor=%lu spi=%lu/%lu/%lu/%lu nrf=%lu/%lu wd=%lu permit=%u stack=%u/%u/%u/%u/%u/%u stop=%lu/%lu q=%lu/%lu/%lu\r\n",
+    MONITOR_LOG("[HEALTH] 状态=%s 周期=%lu 就绪=%lu 已处理=%lu 已上报=%lu 丢失=%lu/%lu/%lu rtc=%lu/%lu dma=%lu/%lu sensor=%lu spi=%lu/%lu/%lu/%lu nrf=%lu/%lu wd=%lu 许可=%u 栈=%u/%u/%u/%u/%u/%u stop=%lu/%lu q=%lu/%lu/%lu\r\n",
              MonitoringTasks_StateText(g_health.state),
              (unsigned long)g_health.cycles_started,
              (unsigned long)g_health.samples_ready,
@@ -850,7 +851,7 @@ static void MonitoringTasks_WatchdogTask(void *argument)
 {
   (void)argument;
 
-  for (;;)
+  while (1)
   {
     /* ===== 每秒检查一次 ===== */
     osDelay(1000U);
@@ -906,7 +907,7 @@ static void MonitoringTasks_WatchdogTask(void *argument)
       {
         g_health.watchdog_faults++;
         g_health.state = MONITOR_STATE_FAULT;
-        MONITOR_LOG("[WATCHDOG] heartbeat stopped; software watchdog denied\r\n");
+        MONITOR_LOG("[WATCHDOG] 心跳停止；软件看门狗拒绝放行\r\n");
       }
       continue;  /* 不喂狗，等待硬件看门狗复位 */
     }
@@ -938,12 +939,28 @@ void MonitoringTasks_RunCycleTask(void *argument)
   (void)argument;
 
   g_health.state = MONITOR_STATE_SELF_TEST;
-  MONITOR_LOG("[RTOS] cycle manager start; waiting for RTC Alarm\r\n");
+  MONITOR_LOG("[RTOS] 周期管理器已启动；等待 RTC 闹钟\r\n");
   MonitoringTasks_RearmRtcAlarm("boot");
   g_health.state = MONITOR_STATE_IDLE;
 
-  for (;;)
+  while (1)
   {
+    /* ===== 步骤 1：等待 RTC 闹钟事件 ===== */
+    /*
+     * osEventFlagsWait 参数说明：
+     *   1) g_monitor_cycle_event：事件组句柄，RTC 中断回调在 HAL_RTC_AlarmAEventCallback
+     *      中会调用 osEventFlagsSet(..., MONITOR_EVENT_RTC_ALARM) 触发它。
+     *   2) MONITOR_EVENT_RTC_ALARM：事件位掩码，值为 (1UL << 0)，表示第 0 位是 RTC 闹钟事件；
+     *      它不是“整型 1”本身，而是“第 0 bit 为 1 的掩码”。
+     *   3) osFlagsWaitAny：等待该掩码中“任意一个”位被置位即可返回；这里就是等待 RTC bit 被置 1。
+     *      只要返回值里包含 MONITOR_EVENT_RTC_ALARM，就说明 RTC 闹钟已经触发。
+     *   4) MONITOR_CYCLE_WAIT_TIMEOUT_MS：最长等待时间，单位 ms。若 RTC 没有在该时间内触发，
+     *      说明闹钟失效/配置异常，代码会记录 rtc_wait_timeouts 并尝试重设。
+     * 返回值 event_flags：返回的是已置位的事件位掩码，通常是一个 bitmask，
+     *   例如 0x00000001 表示 RTC bit 已触发，0x00000000 表示未触发。
+     * 这里后面的判断 if ((event_flags & MONITOR_EVENT_RTC_ALARM) == 0U)
+     * 就是在检测“返回值中是否包含 RTC 事件位”。
+     */
     event_flags = osEventFlagsWait(
       g_monitor_cycle_event,
       MONITOR_EVENT_RTC_ALARM,
@@ -954,7 +971,7 @@ void MonitoringTasks_RunCycleTask(void *argument)
     {
       g_health.rtc_wait_timeouts++;
       g_health.state = MONITOR_STATE_FAULT;
-      MONITOR_LOG("[RTOS] RTC alarm wait timeout, recovering\r\n");
+      MONITOR_LOG("[RTOS] RTC 闹钟等待超时，正在恢复\r\n");
       /* 超时后主动重设闹钟，避免一次配置失败让链路永久停住。 */
       MonitoringTasks_RearmRtcAlarm("wait_timeout");
       g_health.state = MONITOR_STATE_IDLE;
@@ -973,7 +990,7 @@ void MonitoringTasks_RunCycleTask(void *argument)
       /* 请求队列满：采集任务可能卡死（不应该发生，队列深度=2） */
       g_health.acquire_drops++;
       g_health.state = MONITOR_STATE_FAULT;
-      MONITOR_LOG("[RTOS] cycle=%lu request queue full\r\n",
+      MONITOR_LOG("[RTOS] 周期=%lu 请求队列已满\r\n",
                   (unsigned long)request.cycle_id);
       MonitoringTasks_RearmRtcAlarm("request_drop");  /* 重设闹钟，继续下一周期 */
     }
@@ -993,13 +1010,14 @@ void MonitoringTasks_RunCycleTask(void *argument)
       g_health.state = MONITOR_STATE_IDLE;
       if (g_report_done_sem != NULL)
       {
+        // 等待上报完成的二值信号量，超时则记录丢块并进入 FAULT 状态
         if (osSemaphoreAcquire(g_report_done_sem,
                                MONITOR_REPORT_WAIT_TIMEOUT_MS) != osOK)
         {
           /* 上报超时：可能是 NRF24 发送卡死或任务链路中断 */
           g_health.report_drops++;
           g_health.state = MONITOR_STATE_FAULT;
-          MONITOR_LOG("[RTOS] report completion timeout; stop denied\r\n");
+          MONITOR_LOG("[RTOS] 上报完成超时；停止被拒绝\r\n");
           MonitoringTasks_RearmRtcAlarm("report_timeout");
         }
         else
@@ -1014,11 +1032,11 @@ void MonitoringTasks_RunCycleTask(void *argument)
            *   6. 被 RTC 闹钟唤醒后恢复外设和传感器
            *
            * Stop 模式功耗：约 10-50 μA（相比运行模式的 20-40 mA）
-           * 在长周期模式（如 300 秒）下，可大幅延长电池寿命 */
+           * 在长周期模式下，可大幅延长电池寿命 */
           if (MonitoringTasks_EnterStop() == 0U)
           {
             /* Stop 门禁拒绝：可能是看门狗故障、队列泄漏、或 FAULT 状态 */
-            MONITOR_LOG("[RTOS] stop gate denied; system remains running\r\n");
+            MONITOR_LOG("[RTOS] 停止门禁拒绝；系统继续运行\r\n");
             MonitoringTasks_RearmRtcAlarm("stop_gate_denied");
           }
           /* 如果成功进入 Stop，唤醒后会从这里继续执行，进入下一个循环 */
@@ -1029,7 +1047,7 @@ void MonitoringTasks_RunCycleTask(void *argument)
         /* 信号量未初始化：不应该发生（Create 阶段的错误） */
         g_health.report_drops++;
         g_health.state = MONITOR_STATE_FAULT;
-        MONITOR_LOG("[RTOS] report semaphore unavailable; stop denied\r\n");
+        MONITOR_LOG("[RTOS] 上报信号量不可用；停止被拒绝\r\n");
         MonitoringTasks_RearmRtcAlarm("report_sem_missing");
       }
     }
@@ -1044,16 +1062,11 @@ void MonitoringTasks_RunCycleTask(void *argument)
  */
 void MonitoringTasks_Create(void)
 {
-  monitor_sample_block_t *block;
-  const osMutexAttr_t log_mutex_attributes = {
-    .name = "logMutex"
-  };
-
   /* ═══════════════════════════════════════════════════════════════════
    * 第 1 步：初始化通信接口（SPI + I2C）
    * ═══════════════════════════════════════════════════════════════════
    * 必须在任务创建前完成，避免任务运行时驱动未就绪。
-   * MonitoringBus_Init() 会初始化 SPI2 和 I2C1 的统计与错误恢复逻辑。
+   * MonitoringBus_Init() 会初始化 SPI2 和 I2C2 的统计与错误恢复逻辑。
    */
   MonitoringBus_Init();
 
@@ -1085,6 +1098,10 @@ void MonitoringTasks_Create(void)
    * │   任务 B: 等待任务 A 释放锁后才能输出                        │
    * └─────────────────────────────────────────────────────────────┘
    */
+  monitor_sample_block_t *block;
+  const osMutexAttr_t log_mutex_attributes = {
+    .name = "logMutex"
+  };
   g_log_mutex = osMutexNew(&log_mutex_attributes);
 
   /*
@@ -1235,7 +1252,7 @@ void MonitoringTasks_Create(void)
       g_sample_ready_queue == NULL || g_result_queue == NULL ||
       g_report_done_sem == NULL)
   {
-    UART_Log("[RTOS] task pipeline queue creation failed\r\n");
+    UART_Log("[RTOS] 任务流水线队列创建失败\r\n");
     g_health.state = MONITOR_STATE_FAULT;
     return;
   }
@@ -1252,7 +1269,7 @@ void MonitoringTasks_Create(void)
     block = &g_sample_pool[i];
     if (osMessageQueuePut(g_sample_free_queue, &block, 0U, 0U) != osOK)
     {
-      UART_Log("[RTOS] sample pool initialization failed, index=%lu\r\n",
+      UART_Log("[RTOS] 采样块池初始化失败，索引=%lu\r\n",
                (unsigned long)i);
       g_health.state = MONITOR_STATE_FAULT;
       return;
@@ -1427,7 +1444,7 @@ void MonitoringTasks_Create(void)
       g_report_task == NULL || g_health_task == NULL || g_cycle_task == NULL ||
       g_watchdog_task == NULL)
   {
-    UART_Log("[RTOS] task pipeline thread creation failed; free heap=%lu bytes\r\n",
+    UART_Log("[RTOS] 任务流水线线程创建失败；剩余堆=%lu 字节\r\n",
              (unsigned long)xPortGetFreeHeapSize());
     g_health.state = MONITOR_STATE_FAULT;
     return;
@@ -1463,7 +1480,7 @@ void MonitoringTasks_Create(void)
    *   - 之后 main.c 调用 osKernelStart() 启动调度器
    *   - 从此刻起，任务开始按优先级调度运行
    */
-  UART_Log("[RTOS] pipeline ready: acquisition/processing/report/health/watchdog\r\n");
+  UART_Log("[RTOS] 流水线已就绪：采集/处理/上报/健康/看门狗\r\n");
 }
 
 /**

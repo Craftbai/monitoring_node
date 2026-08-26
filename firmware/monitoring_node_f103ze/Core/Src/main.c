@@ -56,7 +56,7 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static const uint8_t start_msg[] = "monitoring_node: boot\r\n";
+static const uint8_t start_msg[] = "监测节点：启动\r\n";
 
 /* USER CODE END PV */
 
@@ -97,12 +97,12 @@ static const char *DS18B20_StatusText(ds18b20_status_t status)
 {
   switch (status)
   {
-    case DS18B20_OK:                 return "OK";
-    case DS18B20_ERROR_NOT_PRESENT:  return "NOT_PRESENT";
-    case DS18B20_ERROR_CRC:          return "CRC";
-    case DS18B20_ERROR_INVALID_DATA: return "INVALID_DATA";
-    case DS18B20_ERROR_TIMEOUT:      return "TIMEOUT";
-    default:                         return "UNKNOWN";
+    case DS18B20_OK:                 return "正常";
+    case DS18B20_ERROR_NOT_PRESENT:  return "未连接";
+    case DS18B20_ERROR_CRC:          return "CRC错误";
+    case DS18B20_ERROR_INVALID_DATA: return "数据无效";
+    case DS18B20_ERROR_TIMEOUT:      return "超时";
+    default:                         return "未知";
   }
 }
 
@@ -111,7 +111,7 @@ static void DS18B20_LogTemperature(int16_t raw)
   int32_t centi_celsius = ((int32_t)raw * 100) / 16;
   int32_t absolute_centi = (centi_celsius < 0) ? -centi_celsius : centi_celsius;
 
-  UART_Log("[M2] temperature: %s%ld.%02ld C, raw=%d\r\n",
+  UART_Log("[M2] 温度：%s%ld.%02ld ℃，原始值=%d\r\n",
            (centi_celsius < 0) ? "-" : "",
            absolute_centi / 100,
            absolute_centi % 100,
@@ -130,7 +130,7 @@ static void DS18B20_TestOnce(void)
     status = DS18B20_ReadROM(&rom);
     if (status == DS18B20_OK)
     {
-      UART_Log("[M2] ROM: %02X-%02X%02X%02X%02X%02X%02X-%02X\r\n",
+      UART_Log("[M2] ROM：%02X-%02X%02X%02X%02X%02X%02X-%02X\r\n",
                rom.family_code,
                rom.serial_number[0], rom.serial_number[1],
                rom.serial_number[2], rom.serial_number[3],
@@ -140,7 +140,7 @@ static void DS18B20_TestOnce(void)
     }
     else
     {
-      UART_Log("[M2] ROM read failed: %s\r\n", DS18B20_StatusText(status));
+      UART_Log("[M2] ROM 读取失败：%s\r\n", DS18B20_StatusText(status));
       /* ROM 都未读到时，不再把全 0 暂存器误报为 0.00 C。 */
       return;
     }
@@ -153,7 +153,7 @@ static void DS18B20_TestOnce(void)
   }
   else
   {
-    UART_Log("[M2] temperature read failed: %s\r\n", DS18B20_StatusText(status));
+    UART_Log("[M2] 温度读取失败：%s\r\n", DS18B20_StatusText(status));
   }
 }
 #endif
@@ -226,24 +226,24 @@ int main(void)
   MX_RTC_Init();
   MX_ADC1_Init();
   MX_TIM3_Init();
-  MX_I2C1_Init();
   MX_SPI2_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   HAL_UART_Transmit(&huart1, (uint8_t *)start_msg, sizeof(start_msg) - 1U, 100U);
 
 #if M2_DS18B20_TEST_MODE
-  UART_Log("[M2] DS18B20 test start, DQ=PG11\r\n");
-  UART_Log("[M2] DQ idle: %s\r\n",
-           HAL_GPIO_ReadPin(DS18B20_DQ_GPIO_Port, DS18B20_DQ_Pin) == GPIO_PIN_SET ? "HIGH" : "LOW");
+  UART_Log("[M2] DS18B20 测试开始，DQ=PG11\r\n");
+  UART_Log("[M2] DQ 空闲状态：%s\r\n",
+           HAL_GPIO_ReadPin(DS18B20_DQ_GPIO_Port, DS18B20_DQ_Pin) == GPIO_PIN_SET ? "高" : "低");
   DS18B20_TestOnce();
 #else
   /* FreeRTOS 周期任务接管 RTC 事件，并在每次上报完成后进入 Stop。 */
-  UART_Log("[BOOT] RTC clk : %s\r\n",
+  UART_Log("[BOOT] RTC 时钟源：%s\r\n",
            (rtc_clk_source == RTC_CLK_LSE) ? "LSE" :
-           (rtc_clk_source == RTC_CLK_LSI) ? "LSI (LSE failed)" : "NONE");
-  UART_Log("[BOOT] boot type: %s\r\n",
-           rtc_cold_boot ? "COLD (time reset)" : "WARM (time kept)");
-  UART_Log("[BOOT] RTC counter: %lu\r\n",
+           (rtc_clk_source == RTC_CLK_LSI) ? "LSI（LSE 失败）" : "无");
+  UART_Log("[BOOT] 启动类型：%s\r\n",
+           rtc_cold_boot ? "冷启动（时间重置）" : "热启动（时间保留）");
+  UART_Log("[BOOT] RTC 计数器：%lu\r\n",
            (unsigned long)RTC_GetCounter());
 #endif
   /* USER CODE END 2 */
